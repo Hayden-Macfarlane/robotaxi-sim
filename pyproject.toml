@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robotaxi-sim"
+version = "0.1.0"
+description = "Single-city robotaxi network manager simulation with OSM routing."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2.0.0",
+    "numpy",
+    "networkx",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "websockets>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.8",
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "osmnx>=2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "core_data*",
+    "event_engine*",
+    "routing*",
+    "demand*",
+    "dispatch*",
+    "fleet*",
+    "simulation_loop*",
+    "api*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

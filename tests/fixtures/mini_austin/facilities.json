@@ -1,0 +1,38 @@
+[
+  {
+    "id": "depot-mini",
+    "kind": "depot",
+    "node_id": "n-a",
+    "lat": 30.20,
+    "lon": -97.80,
+    "name": "Mini Depot",
+    "capacity": 10
+  },
+  {
+    "id": "charger-mini",
+    "kind": "charger",
+    "node_id": "n-b",
+    "lat": 30.21,
+    "lon": -97.79,
+    "name": "Mini Charger",
+    "capacity": 4
+  },
+  {
+    "id": "cleaning-mini",
+    "kind": "cleaning",
+    "node_id": "n-c",
+    "lat": 30.22,
+    "lon": -97.78,
+    "name": "Mini Cleaning",
+    "capacity": 2
+  },
+  {
+    "id": "maintenance-mini",
+    "kind": "maintenance",
+    "node_id": "n-d",
+    "lat": 30.21,
+    "lon": -97.77,
+    "name": "Mini Maintenance",
+    "capacity": 2
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "depot-main",
+    "kind": "depot",
+    "node_id": "",
+    "lat": 30.2672,
+    "lon": -97.7431,
+    "name": "Central Depot",
+    "capacity": 20
+  },
+  {
+    "id": "charger-downtown",
+    "kind": "charger",
+    "node_id": "",
+    "lat": 30.2650,
+    "lon": -97.7400,
+    "name": "Downtown Charger",
+    "capacity": 8
+  },
+  {
+    "id": "cleaning-downtown",
+    "kind": "cleaning",
+    "node_id": "",
+    "lat": 30.2640,
+    "lon": -97.7380,
+    "name": "Downtown Cleaning Bay",
+    "capacity": 4
+  },
+  {
+    "id": "maintenance-central",
+    "kind": "maintenance",
+    "node_id": "",
+    "lat": 30.2690,
+    "lon": -97.7450,
+    "name": "Central Maintenance",
+    "capacity": 4
+  }
+]

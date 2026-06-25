@@ -1,0 +1,26 @@
+# Robotaxi Sim — Cursor project rules
+
+## Project
+- **Robotaxi Sim** is a headless discrete-event robotaxi network simulation in Python.
+- **Fully independent** of apex-logistics — never import from sibling repos.
+
+## Python version
+- Target **Python 3.14+** only.
+
+## Type hints
+- Built-in generics (`list[T]`, `dict[str, V]`), unions with `|`.
+
+## Data models
+- **Pydantic v2** in `core_data/` — schemas only, no simulation logic.
+
+## Architecture
+- `core_data/` — Vehicle, TripRequest, RoadNode, RoadEdge, NetworkPolicy
+- `event_engine/` — heap scheduler
+- `routing/` — city graph load + Dijkstra
+- `demand/` — trip request generation
+- `dispatch/` — vehicle–trip matching
+- `simulation_loop/manager.py` — orchestrator
+- `api/server.py` — FastAPI + WebSocket
+
+## Documentation
+- Module, class, and public function docstrings required.

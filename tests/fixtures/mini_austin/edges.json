@@ -1,0 +1,92 @@
+[
+  {
+    "id": "e-ab",
+    "origin_id": "n-a",
+    "destination_id": "n-b",
+    "distance_km": 1.2,
+    "travel_time_min": 2.0,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.20, "lon": -97.80},
+      {"lat": 30.205, "lon": -97.795},
+      {"lat": 30.21, "lon": -97.79}
+    ],
+    "name": "Curve A-B",
+    "highway": "residential"
+  },
+  {
+    "id": "e-ba",
+    "origin_id": "n-b",
+    "destination_id": "n-a",
+    "distance_km": 1.2,
+    "travel_time_min": 2.0,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.21, "lon": -97.79},
+      {"lat": 30.205, "lon": -97.795},
+      {"lat": 30.20, "lon": -97.80}
+    ],
+    "name": "Curve B-A",
+    "highway": "residential"
+  },
+  {
+    "id": "e-bc",
+    "origin_id": "n-b",
+    "destination_id": "n-c",
+    "distance_km": 1.4,
+    "travel_time_min": 2.5,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.21, "lon": -97.79},
+      {"lat": 30.215, "lon": -97.785},
+      {"lat": 30.22, "lon": -97.78}
+    ],
+    "name": "Curve B-C",
+    "highway": "residential"
+  },
+  {
+    "id": "e-cb",
+    "origin_id": "n-c",
+    "destination_id": "n-b",
+    "distance_km": 1.4,
+    "travel_time_min": 2.5,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.22, "lon": -97.78},
+      {"lat": 30.215, "lon": -97.785},
+      {"lat": 30.21, "lon": -97.79}
+    ],
+    "name": "Curve C-B",
+    "highway": "residential"
+  },
+  {
+    "id": "e-cd",
+    "origin_id": "n-c",
+    "destination_id": "n-d",
+    "distance_km": 1.0,
+    "travel_time_min": 1.8,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.22, "lon": -97.78},
+      {"lat": 30.215, "lon": -97.775},
+      {"lat": 30.21, "lon": -97.77}
+    ],
+    "name": "Curve C-D",
+    "highway": "residential"
+  },
+  {
+    "id": "e-dc",
+    "origin_id": "n-d",
+    "destination_id": "n-c",
+    "distance_km": 1.0,
+    "travel_time_min": 1.8,
+    "weight_multiplier": 1.0,
+    "geometry": [
+      {"lat": 30.21, "lon": -97.77},
+      {"lat": 30.215, "lon": -97.775},
+      {"lat": 30.22, "lon": -97.78}
+    ],
+    "name": "Curve D-C",
+    "highway": "residential"
+  }
+]

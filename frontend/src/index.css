@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface-base: #0f1419;
+  --surface-raised: #1a2332;
+  --surface-header: #151c28;
+  --border-default: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent: #3b82f6;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font-family: Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.leaflet-container {
+  background: #e8edf2;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.leaflet-popup-content-wrapper {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.leaflet-popup-tip {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+}
+
+.leaflet-popup-content {
+  margin: 8px 12px;
+  font-size: 12px;
+}
+
+@layer components {
+  .input-dark {
+    @apply w-full bg-surface-raised border border-border-default rounded-md px-3 py-1.5
+      text-sm text-text-primary font-mono
+      focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent;
+  }
+
+  .checkbox-dark {
+    @apply h-4 w-4 rounded border-border-default bg-surface-raised text-accent
+      focus:ring-2 focus:ring-accent/50 focus:ring-offset-0 cursor-pointer;
+    accent-color: var(--accent);
+  }
+}

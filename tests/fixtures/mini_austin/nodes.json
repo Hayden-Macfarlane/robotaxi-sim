@@ -1,0 +1,6 @@
+[
+  {"id": "n-a", "lat": 30.20, "lon": -97.80, "zone": "central"},
+  {"id": "n-b", "lat": 30.21, "lon": -97.79, "zone": "central"},
+  {"id": "n-c", "lat": 30.22, "lon": -97.78, "zone": "downtown"},
+  {"id": "n-d", "lat": 30.21, "lon": -97.77, "zone": "downtown"}
+]
