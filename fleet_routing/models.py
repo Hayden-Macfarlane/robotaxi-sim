@@ -31,6 +31,7 @@ class ActionType(StrEnum):
     """Routing rule action kinds."""
 
     ASSIGN_NEAREST_ELIGIBLE = "assign_nearest_eligible"
+    ASSIGN_NEAREST_IDLE_OR_REPOSITIONING = "assign_nearest_idle_or_repositioning"
     ASSIGN_PREFER_ZONE = "assign_prefer_zone"
     REPOSITION_TO_BEST_DEFICIT = "reposition_to_best_deficit"
     REPOSITION_TO_ZONE = "reposition_to_zone"

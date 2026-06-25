@@ -236,6 +236,30 @@ class RuleEvaluator:
                 ctx.router,
                 surge_multiplier=ctx.policy.surge_multiplier,
                 policy=ctx.policy,
+                include_repositioning=False,
+            )
+            if match is None:
+                return None
+            return DispatchDecision(
+                trip_id=trip.id,
+                vehicle_id=match.vehicle_id,
+                rule_id=rule.id,
+                rule_name=rule.name,
+                action=action,
+            )
+        if action == ActionType.ASSIGN_NEAREST_IDLE_OR_REPOSITIONING:
+            eligible_ext = {
+                vid: v for vid, v in vehicles.items()
+                if vid not in assigned_vehicle_ids
+                and vehicle_eligible_for_dispatch(v, ctx.policy, include_repositioning=True)
+            }
+            match = pick_best_vehicle(
+                trip,
+                eligible_ext,
+                ctx.router,
+                surge_multiplier=ctx.policy.surge_multiplier,
+                policy=ctx.policy,
+                include_repositioning=True,
             )
             if match is None:
                 return None
@@ -259,6 +283,7 @@ class RuleEvaluator:
                 ctx.router,
                 surge_multiplier=ctx.policy.surge_multiplier,
                 policy=ctx.policy,
+                include_repositioning=False,
             )
             if match is None:
                 return None

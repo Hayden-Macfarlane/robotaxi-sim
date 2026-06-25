@@ -152,6 +152,8 @@ function DraggableVehicleMarker({ vehicle, draggable, highlighted, onDragEnd }: 
 
 interface Props {
   snapshot: SimulationSnapshot
+  connected: boolean
+  connecting: boolean
   stagingVehicleId: string | null
   selectedVehicleIds: string[]
   highlightVehicleId?: string | null
@@ -160,9 +162,27 @@ interface Props {
   onClearStaging: () => void
 }
 
+function mapCenter(snapshot: SimulationSnapshot): [number, number] | null {
+  if (snapshot.map_center) {
+    return [snapshot.map_center.lat, snapshot.map_center.lon]
+  }
+  if (snapshot.vehicles.length > 0) {
+    const v = snapshot.vehicles[0]
+    return [v.lat, v.lon]
+  }
+  if (snapshot.nodes.length > 0) {
+    const lats = snapshot.nodes.map(n => n.lat)
+    const lons = snapshot.nodes.map(n => n.lon)
+    return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lons) + Math.max(...lons)) / 2]
+  }
+  return null
+}
+
 /** Leaflet map with zone overlays, facilities, drag-to-stage, and click-to-stage. */
 export function CityMap({
   snapshot,
+  connected,
+  connecting,
   stagingVehicleId,
   selectedVehicleIds,
   highlightVehicleId = null,
@@ -170,7 +190,6 @@ export function CityMap({
   onCommand,
   onClearStaging,
 }: Props) {
-  const nodes = snapshot.nodes
   const zoneRows: ZoneBalanceSnap[] = snapshot.zone_balance ?? []
   const zoneOverlays: ZoneOverlaySnap[] = snapshot.zone_overlays ?? []
   const balanceByZone = useMemo(() => {
@@ -179,21 +198,22 @@ export function CityMap({
     return out
   }, [zoneRows])
   const facilities: FacilitySnap[] = snapshot.facilities ?? []
+  const center = mapCenter(snapshot)
 
-  if (nodes.length === 0) {
+  if (!center) {
+    const message = connecting
+      ? 'Connecting to simulation…'
+      : snapshot.status === 'initializing'
+        ? 'Loading city graph…'
+        : connected
+          ? 'Waiting for map data…'
+          : 'Backend offline — start the API on port 8001'
     return (
-      <div className="h-full flex items-center justify-center bg-surface-base text-text-secondary text-sm">
-        Loading map…
+      <div className="h-full flex items-center justify-center bg-surface-base text-text-secondary text-sm px-6 text-center">
+        {message}
       </div>
     )
   }
-
-  const lats = nodes.map(n => n.lat)
-  const lons = nodes.map(n => n.lon)
-  const center: [number, number] = [
-    (Math.min(...lats) + Math.max(...lats)) / 2,
-    (Math.min(...lons) + Math.max(...lons)) / 2,
-  ]
 
   const handleStage = (lat: number, lon: number) => {
     if (selectedVehicleIds.length > 0) {

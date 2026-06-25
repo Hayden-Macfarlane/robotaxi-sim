@@ -4,73 +4,72 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from routing.austin_zones_geo import (
+    AUSTIN_BASE_ZONE_POLYGONS,
+    AUSTIN_POI_ZONE_RINGS,
+    AUSTIN_ZONE_LOOKUP_ORDER,
+)
+
 # Greater Austin service area (includes Kyle / Buda south of city proper).
 AUSTIN_BBOX = {"north": 30.52, "south": 30.00, "east": -97.55, "west": -97.95}
 
-# Grid split lines — rows south→north, columns west→east.
-_LAT_BREAKS: tuple[float, ...] = (30.00, 30.12, 30.20, 30.26, 30.285, 30.32, 30.38, 30.52)
-_LON_BREAKS: tuple[float, ...] = (-97.95, -97.80, -97.755, -97.715, -97.68, -97.65, -97.55)
-
-# Neighborhood labels for each grid cell (must match lat/lon break dimensions).
-_GRID_NAMES: tuple[tuple[str, ...], ...] = (
-    ("kyle", "kyle", "kyle", "kyle", "kyle", "kyle"),
-    ("buda", "buda", "airport", "airport", "airport", "east_side"),
-    ("southwest", "south_central", "south_central", "riverside", "riverside", "east_side"),
-    ("southwest", "central", "downtown", "downtown", "riverside", "east_side"),
-    ("westlake", "central", "campus", "campus", "east_side", "east_side"),
-    ("westlake", "domain", "domain", "domain", "east_side", "east_side"),
-    ("northwest", "northwest", "northwest", "northeast", "northeast", "northeast"),
-)
-
 
 @dataclass(frozen=True)
-class ZoneRect:
-    """Named axis-aligned zone rectangle in WGS-84 degrees."""
+class ZonePolygon:
+    """Named polygon zone in WGS-84 degrees."""
 
     name: str
-    min_lat: float
-    max_lat: float
-    min_lon: float
-    max_lon: float
+    ring: tuple[tuple[float, float], ...]
+    kind: str = "grid"
 
     def contains(self, lat: float, lon: float) -> bool:
-        """Return True when ``(lat, lon)`` lies inside this rectangle."""
-        return self.min_lat <= lat <= self.max_lat and self.min_lon <= lon <= self.max_lon
+        """Return True when ``(lat, lon)`` lies inside this polygon ring."""
+        return _point_in_polygon(lat, lon, self.ring)
 
-    def ring(self) -> list[tuple[float, float]]:
-        """Return closed polygon ring for map overlays."""
-        return [
-            (self.min_lat, self.min_lon),
-            (self.max_lat, self.min_lon),
-            (self.max_lat, self.max_lon),
-            (self.min_lat, self.max_lon),
-        ]
+    def bounding_box(self) -> tuple[float, float, float, float]:
+        """Return ``(min_lat, max_lat, min_lon, max_lon)`` for the ring."""
+        lats = [pt[0] for pt in self.ring]
+        lons = [pt[1] for pt in self.ring]
+        return min(lats), max(lats), min(lons), max(lons)
 
 
-def _grid_zone_rects() -> tuple[ZoneRect, ...]:
-    """Build one rectangle per grid cell so the city bbox is fully tiled."""
-    rects: list[ZoneRect] = []
-    for row_idx, row in enumerate(_GRID_NAMES):
-        min_lat = _LAT_BREAKS[row_idx]
-        max_lat = _LAT_BREAKS[row_idx + 1]
-        for col_idx, name in enumerate(row):
-            rects.append(ZoneRect(
-                name,
-                min_lat,
-                max_lat,
-                _LON_BREAKS[col_idx],
-                _LON_BREAKS[col_idx + 1],
-            ))
-    return tuple(rects)
+def _point_in_polygon(lat: float, lon: float, ring: tuple[tuple[float, float], ...]) -> bool:
+    """Winding-number point-in-polygon test using lon/lat as x/y."""
+    x, y = lon, lat
+    winding = 0
+    for i in range(len(ring)):
+        y1, x1 = ring[i]
+        y2, x2 = ring[(i + 1) % len(ring)]
+        if y1 <= y:
+            if y2 > y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) > 0:
+                winding += 1
+        else:
+            if y2 <= y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) < 0:
+                winding -= 1
+    return winding != 0
 
 
-# POI cores first, then full grid partition (most-specific wins on overlap).
-AUSTIN_ZONE_RECTS: tuple[ZoneRect, ...] = (
-    ZoneRect("airport", 30.18, 30.235, -97.685, -97.625),
-    ZoneRect("downtown", 30.262, 30.278, -97.748, -97.732),
-    ZoneRect("campus", 30.288, 30.308, -97.742, -97.718),
-    *_grid_zone_rects(),
-)
+def _build_zone_polygons() -> tuple[ZonePolygon, ...]:
+    """Materialize lookup polygons from geo definitions."""
+    by_name: dict[str, ZonePolygon] = {}
+    for name, ring in AUSTIN_POI_ZONE_RINGS.items():
+        by_name[name] = ZonePolygon(name=name, ring=ring, kind="poi")
+    for name, ring in AUSTIN_BASE_ZONE_POLYGONS:
+        if name in AUSTIN_POI_ZONE_RINGS:
+            continue
+        by_name[name] = ZonePolygon(name=name, ring=ring, kind="grid")
+    ordered: list[ZonePolygon] = []
+    for name in AUSTIN_ZONE_LOOKUP_ORDER:
+        zone = by_name.get(name)
+        if zone is not None:
+            ordered.append(zone)
+    for name, zone in by_name.items():
+        if name not in AUSTIN_ZONE_LOOKUP_ORDER:
+            ordered.append(zone)
+    return tuple(ordered)
+
+
+AUSTIN_ZONE_POLYGONS: tuple[ZonePolygon, ...] = _build_zone_polygons()
 
 # Display colors (hex) for map overlays — mirrored in frontend.
 ZONE_COLORS: dict[str, str] = {
@@ -91,57 +90,58 @@ ZONE_COLORS: dict[str, str] = {
     "unknown": "#475569",
 }
 
-# POI-sized cores rendered with slightly higher opacity on the map.
-POI_ZONE_NAMES: frozenset[str] = frozenset({"airport", "downtown", "campus"})
+POI_ZONE_NAMES: frozenset[str] = frozenset(AUSTIN_POI_ZONE_RINGS)
 
 
 def all_zone_names() -> list[str]:
     """Return canonical zone labels for operator controls."""
     seen: set[str] = set()
     names: list[str] = []
-    for rect in AUSTIN_ZONE_RECTS:
-        if rect.name not in seen:
-            seen.add(rect.name)
-            names.append(rect.name)
+    for zone in AUSTIN_ZONE_POLYGONS:
+        if zone.name not in seen:
+            seen.add(zone.name)
+            names.append(zone.name)
     return sorted(names)
 
 
 def zone_for_point(lat: float, lon: float, fallback: str = "unknown") -> str:
-    """Return demand zone for a WGS-84 coordinate using neighborhood rectangles."""
-    for rect in AUSTIN_ZONE_RECTS:
-        if rect.contains(lat, lon):
-            return rect.name
+    """Return demand zone for a WGS-84 coordinate using highway-aligned polygons."""
+    for poi_name, ring in AUSTIN_POI_ZONE_RINGS.items():
+        if _point_in_polygon(lat, lon, ring):
+            return poi_name
+    for name, ring in AUSTIN_BASE_ZONE_POLYGONS:
+        if _point_in_polygon(lat, lon, ring):
+            return name
     return fallback
 
 
 def exclusive_zone_polygons() -> dict[str, list[list[tuple[float, float]]]]:
-    """Non-overlapping polygons grouped by zone name for map overlays."""
+    """Highway-aligned polygons grouped by zone name for map overlays."""
     polys: dict[str, list[list[tuple[float, float]]]] = {}
-    for rect in _grid_zone_rects():
-        polys.setdefault(rect.name, []).append(rect.ring())
+    for name, ring in AUSTIN_BASE_ZONE_POLYGONS:
+        polys.setdefault(name, []).append(list(ring))
     return polys
 
 
 def poi_zone_polygons() -> dict[str, list[tuple[float, float]]]:
-    """POI core rectangles drawn with higher emphasis on the map."""
-    return {
-        rect.name: rect.ring()
-        for rect in AUSTIN_ZONE_RECTS[:3]
-    }
+    """POI core polygons drawn with higher emphasis on the map."""
+    return {name: list(ring) for name, ring in AUSTIN_POI_ZONE_RINGS.items()}
 
 
 def zone_bounding_boxes() -> dict[str, tuple[float, float, float, float]]:
     """Return merged ``(min_lat, max_lat, min_lon, max_lon)`` per zone label."""
     boxes: dict[str, list[float]] = {}
-    for rect in _grid_zone_rects():
-        if rect.name not in boxes:
-            boxes[rect.name] = [rect.min_lat, rect.max_lat, rect.min_lon, rect.max_lon]
+    for name, ring in [*AUSTIN_BASE_ZONE_POLYGONS, *((n, r) for n, r in AUSTIN_POI_ZONE_RINGS.items())]:
+        lats = [pt[0] for pt in ring]
+        lons = [pt[1] for pt in ring]
+        if name not in boxes:
+            boxes[name] = [min(lats), max(lats), min(lons), max(lons)]
             continue
-        b = boxes[rect.name]
-        b[0] = min(b[0], rect.min_lat)
-        b[1] = max(b[1], rect.max_lat)
-        b[2] = min(b[2], rect.min_lon)
-        b[3] = max(b[3], rect.max_lon)
+        b = boxes[name]
+        b[0] = min(b[0], min(lats))
+        b[1] = max(b[1], max(lats))
+        b[2] = min(b[2], min(lons))
+        b[3] = max(b[3], max(lons))
     return {name: (b[0], b[1], b[2], b[3]) for name, b in boxes.items()}
 
 
@@ -156,3 +156,20 @@ def zone_overlay_snapshot() -> list[dict[str, object]]:
             "polygons": [[[lat, lon] for lat, lon in ring] for ring in rings],
         })
     return overlays
+
+
+def sample_interior_point(ring: tuple[tuple[float, float], ...]) -> tuple[float, float]:
+    """Return a point likely inside ``ring`` for tests and diagnostics."""
+    min_lat, max_lat, min_lon, max_lon = ZonePolygon(name="", ring=ring).bounding_box()
+    for _ in range(32):
+        lat = (min_lat + max_lat) / 2
+        lon = (min_lon + max_lon) / 2
+        if _point_in_polygon(lat, lon, ring):
+            return lat, lon
+        min_lat = (min_lat + lat) / 2
+        max_lat = (max_lat + lat) / 2
+        min_lon = (min_lon + lon) / 2
+        max_lon = (max_lon + lon) / 2
+    lats = [pt[0] for pt in ring]
+    lons = [pt[1] for pt in ring]
+    return (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2

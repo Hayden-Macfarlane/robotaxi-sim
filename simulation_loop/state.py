@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core_data.models import DispatchAction, Facility, NetworkPolicy, SpecialEvent, TripRequest, Vehicle
-from fleet_routing.defaults import default_routing_rules
+from core_data.models import (
+    DispatchAction,
+    Facility,
+    NetworkPolicy,
+    OperatorSetup,
+    SpecialEvent,
+    TripRequest,
+    Vehicle,
+)
+from fleet_routing.defaults import manual_first_routing_rules
 from fleet_routing.models import RoutingRuleHit, RoutingRuleSet
 
 
@@ -19,8 +27,9 @@ class SimulationState:
     facilities: dict[str, Facility] = field(default_factory=dict)
     special_events: list[SpecialEvent] = field(default_factory=list)
     dispatch_log: list[DispatchAction] = field(default_factory=list)
-    routing_rules: RoutingRuleSet = field(default_factory=default_routing_rules)
+    routing_rules: RoutingRuleSet = field(default_factory=manual_first_routing_rules)
     routing_rule_hits: list[RoutingRuleHit] = field(default_factory=list)
+    operator_setup: OperatorSetup = field(default_factory=OperatorSetup)
     revenue: float = 0.0
     trips_completed: int = 0
     trips_cancelled: int = 0

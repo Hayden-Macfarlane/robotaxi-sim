@@ -28,7 +28,7 @@ uvicorn api.server:app --reload --port 8001
 cd frontend && npm install && npm run dev -- --port 5174
 ```
 
-Open `http://127.0.0.1:5174`.
+Open `http://127.0.0.1:5174`. First startup loads the full Austin graph (~30s); the launcher waits until the backend is ready.
 
 ## Environment
 

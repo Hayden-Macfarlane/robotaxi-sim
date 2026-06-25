@@ -22,6 +22,7 @@ dev = [
     "mypy>=1.8",
     "ruff>=0.6",
     "pytest>=8.0",
+    "pytest-timeout>=2.3",
     "osmnx>=2.0",
 ]
 
@@ -40,6 +41,11 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: integration tests requiring the full Austin OSM graph (~30s each)",
+]
+addopts = "-m 'not slow' --timeout=30"
+timeout_method = "thread"
 
 [tool.ruff]
 target-version = "py314"

@@ -9,6 +9,7 @@ cd "$ROOT"
 
 export ROBOTAXI_BACKEND_PORT="${ROBOTAXI_BACKEND_PORT:-8001}"
 export ROBOTAXI_FRONTEND_PORT="${ROBOTAXI_FRONTEND_PORT:-5174}"
+export ROBOTAXI_CITY=austin
 
 clear
 echo "Robotaxi Sim — local launcher"
@@ -18,7 +19,7 @@ echo ""
 echo "Only prior Robotaxi processes are stopped; other apps on different ports are left alone."
 echo ""
 
-if ! ./scripts/start-local.sh; then
+if ! ./scripts/start-local.sh --foreground; then
   echo ""
   echo "Robotaxi Sim exited with an error. See messages above or .local/logs/."
   read -r -p "Press Enter to close this window…"

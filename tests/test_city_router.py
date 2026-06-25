@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from routing.city_loader import load_city_graph
 from routing.city_router import CityRouter
 from fixture_loader import load_fixture_router
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 def test_path_between_random_nodes() -> None:
     """Any two grid nodes should have a finite travel time."""
     nodes, edges = load_city_graph("austin")
@@ -20,6 +24,8 @@ def test_path_between_random_nodes() -> None:
     assert minutes > 0.0
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 def test_same_node_zero_travel() -> None:
     """Origin equal to destination costs zero."""
     nodes, edges = load_city_graph("austin")
@@ -30,6 +36,8 @@ def test_same_node_zero_travel() -> None:
     assert result[1] == 0.0
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 def test_snap_point_returns_nearest_node() -> None:
     """Snap should return a valid graph vertex when far from streets."""
     nodes, edges = load_city_graph("austin")

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SimCommand, SimulationSnapshot } from '../types/simulation'
 
+const WS_RETRY_MS = 2000
+
 function defaultWsUrl(): string {
   if (typeof window !== 'undefined' && import.meta.env.DEV) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -16,14 +18,15 @@ const EMPTY_SNAPSHOT: SimulationSnapshot = {
   is_running: false,
   speed_multiplier: 1,
   city: 'austin',
+  map_center: { lat: 30.27, lon: -97.74 },
   policy: {
-    fleet_size: 12,
+    fleet_size: 14,
     base_fare: 8,
     surge_multiplier: 1,
     reposition_idle_min: 15,
-    auto_dispatch_enabled: true,
-    auto_reposition_enabled: true,
-    post_trip_reposition_enabled: true,
+    auto_dispatch_enabled: false,
+    auto_reposition_enabled: false,
+    post_trip_reposition_enabled: false,
     max_idle_per_zone: 3,
     max_idle_by_zone: {},
     reposition_idle_min_by_zone: {},
@@ -36,7 +39,7 @@ const EMPTY_SNAPSHOT: SimulationSnapshot = {
     value_per_trip: 2,
     manual_hold_min: 60,
     depot_release_enabled: true,
-    min_depot_buffer: 2,
+    min_depot_buffer: 0,
     proactive_staging_enabled: true,
     battery_drain_per_km: 0.4,
     low_battery_pct: 20,
@@ -69,6 +72,12 @@ const EMPTY_SNAPSHOT: SimulationSnapshot = {
   },
   supply_by_zone: {},
   demand_by_zone: {},
+  operator_setup: {
+    setup_complete: true,
+    dispatch_assignment_mode: 'closest_idle_or_repositioning',
+    advanced_automation_enabled: false,
+  },
+  dispatch_candidates: {},
   vehicles: [],
   trips: [],
   riders: [],
@@ -80,37 +89,74 @@ const EMPTY_SNAPSHOT: SimulationSnapshot = {
 export function useSimulation() {
   const [snapshot, setSnapshot] = useState<SimulationSnapshot>(EMPTY_SNAPSHOT)
   const [connected, setConnected] = useState(false)
+  const [connecting, setConnecting] = useState(true)
   const [alert, setAlert] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const sendCommand = useCallback((cmd: SimCommand) => {
     wsRef.current?.send(JSON.stringify(cmd))
   }, [])
 
   useEffect(() => {
-    const ws = new WebSocket(defaultWsUrl())
-    wsRef.current = ws
+    let cancelled = false
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data as string) as Record<string, unknown>
-        if (data.type === 'STATE_SNAPSHOT') {
-          setSnapshot(data as unknown as SimulationSnapshot)
-        } else if (data.type === 'SYSTEM_ALERT') {
-          setAlert(String(data.message ?? 'Error'))
+    const connect = () => {
+      if (cancelled) return
+      setConnecting(true)
+      const ws = new WebSocket(defaultWsUrl())
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        if (cancelled) return
+        setConnected(true)
+        setConnecting(false)
+      }
+
+      ws.onclose = () => {
+        if (cancelled) return
+        setConnected(false)
+        setConnecting(true)
+        wsRef.current = null
+        retryRef.current = setTimeout(connect, WS_RETRY_MS)
+      }
+
+      ws.onerror = () => {
+        ws.close()
+      }
+
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data as string) as Record<string, unknown>
+          if (data.type === 'STATE_SNAPSHOT') {
+            const incoming = data as unknown as SimulationSnapshot
+            setSnapshot(prev => ({
+              ...prev,
+              ...incoming,
+              policy: incoming.policy ?? prev.policy,
+              kpis: incoming.kpis ?? prev.kpis,
+              operator_setup: incoming.operator_setup ?? prev.operator_setup,
+              map_center: incoming.map_center ?? prev.map_center,
+            }))
+            setConnecting(false)
+          } else if (data.type === 'SYSTEM_ALERT') {
+            setAlert(String(data.message ?? 'Error'))
+          }
+        } catch {
+          /* ignore malformed */
         }
-      } catch {
-        /* ignore malformed */
       }
     }
 
+    connect()
+
     return () => {
-      ws.close()
+      cancelled = true
+      if (retryRef.current) clearTimeout(retryRef.current)
+      wsRef.current?.close()
       wsRef.current = null
     }
   }, [])
 
-  return { snapshot, connected, alert, setAlert, sendCommand }
+  return { snapshot, connected, connecting, alert, setAlert, sendCommand }
 }

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from core_data.models import GeoPoint
 from demand.forecast import forecast_intensity
 from routing.city_router import CityRouter
-from routing.zones import all_zone_names, zone_for_point
+from routing.zones import all_zone_names, zone_bounding_boxes, zone_for_point
 
 ZONE_WEIGHTS: dict[str, float] = {
     "airport": 2.5,
@@ -77,7 +77,10 @@ class DemandGenerator:
         router: CityRouter,
         zone: str,
     ) -> GeoPoint | None:
-        boxes = router.zone_bounding_boxes()
+        boxes = zone_bounding_boxes()
+        router_boxes = router.zone_bounding_boxes()
+        for zone_name, bbox in router_boxes.items():
+            boxes.setdefault(zone_name, bbox)
         bbox = boxes.get(zone)
         if bbox is None:
             return None

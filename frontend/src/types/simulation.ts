@@ -167,14 +167,34 @@ export interface KpiSnap {
   vehicles_needing_service?: number
 }
 
+export type DispatchAssignmentMode =
+  | 'manual'
+  | 'closest_idle_or_repositioning'
+  | 'closest_idle'
+
+export interface DispatchCandidateSnap {
+  vehicle_id: string
+  eta_min: number
+  state: VehicleState
+}
+
+export interface OperatorSetupSnap {
+  setup_complete: boolean
+  dispatch_assignment_mode: DispatchAssignmentMode | null
+  advanced_automation_enabled: boolean
+}
+
 export interface SimulationSnapshot {
   type: 'STATE_SNAPSHOT'
+  status?: 'initializing'
   current_time_h: number
   sim_start_iso: string
   current_time_iso?: string
   is_running: boolean
   speed_multiplier: number
   city: string
+  map_center?: GeoPoint
+  map_bounds?: { south: number; north: number; west: number; east: number }
   policy: NetworkPolicySnap
   kpis: KpiSnap
   supply_by_zone: Record<string, number>
@@ -188,6 +208,8 @@ export interface SimulationSnapshot {
   recent_dispatch_actions?: DispatchActionSnap[]
   routing_rules?: import('./routing').RoutingRuleSet
   routing_rule_hits?: import('./routing').RoutingRuleHit[]
+  operator_setup?: OperatorSetupSnap
+  dispatch_candidates?: Record<string, DispatchCandidateSnap[]>
   vehicles: VehicleSnap[]
   trips: TripSnap[]
   riders: RiderSnap[]
@@ -204,6 +226,7 @@ export type SimCommand =
   | { type: 'SET_NETWORK_POLICY'; [key: string]: unknown }
   | { type: 'SET_ROUTING_RULES'; rules: import('./routing').RoutingRule[]; routing_enabled?: boolean }
   | { type: 'RESET_ROUTING_RULES' }
+  | { type: 'SET_OPERATOR_SETUP'; dispatch_assignment_mode?: DispatchAssignmentMode; advanced_automation_enabled?: boolean }
   | { type: 'DISPATCH_VEHICLE'; vehicle_id: string; trip_id: string }
   | { type: 'REPOSITION_VEHICLE'; vehicle_id: string; node_id?: string; lat?: number; lon?: number }
   | { type: 'STAGE_VEHICLES'; vehicle_ids: string[]; lat: number; lon: number }

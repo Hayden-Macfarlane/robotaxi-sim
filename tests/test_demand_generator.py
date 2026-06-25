@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from demand.generator import DemandGenerator
-from routing.city_loader import load_city_graph
-from routing.city_router import CityRouter
 
 
 def test_rush_hour_multiplier() -> None:
@@ -25,8 +23,9 @@ def test_expected_trips_scales_with_dt() -> None:
 
 def test_spawn_returns_geo_points() -> None:
     """Spawned trips should be lat/lon pairs with a valid route."""
-    nodes, edges = load_city_graph("austin")
-    router = CityRouter(nodes, edges)
+    from fixture_loader import load_fixture_router
+
+    router = load_fixture_router()
     gen = DemandGenerator()
     gen.set_seed(99)
     for hour in range(20):

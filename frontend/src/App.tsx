@@ -14,8 +14,8 @@ import { SimButton } from './components/ui/SimButton'
 
 /** Robotaxi manager control tower shell. */
 export default function App() {
-  const { snapshot, connected, alert, setAlert, sendCommand } = useSimulation()
-  const [activeTab, setActiveTab] = useState<SidebarTabId>('assets')
+  const { snapshot, connected, connecting, alert, setAlert, sendCommand } = useSimulation()
+  const [activeTab, setActiveTab] = useState<SidebarTabId>('automation')
   const [stagingVehicleId, setStagingVehicleId] = useState<string | null>(null)
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([])
   const [highlightVehicleId, setHighlightVehicleId] = useState<string | null>(null)
@@ -32,6 +32,12 @@ export default function App() {
     setSelectedVehicleIds([])
   }
 
+  const operatorSetup = snapshot.operator_setup ?? {
+    setup_complete: true,
+    dispatch_assignment_mode: 'closest_idle_or_repositioning',
+    advanced_automation_enabled: false,
+  }
+
   return (
     <div className="h-full flex flex-col bg-surface-base">
       <header className="flex items-center justify-between px-5 py-3 border-b border-border-default bg-surface-header">
@@ -41,10 +47,10 @@ export default function App() {
             {snapshot.city}
           </span>
           <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded-full border ${
-            connected ? 'border-emerald-800 bg-emerald-950/50 text-emerald-300' : 'border-red-800 bg-red-950/50 text-red-300'
+            connected ? 'border-emerald-800 bg-emerald-950/50 text-emerald-300' : connecting ? 'border-amber-800 bg-amber-950/50 text-amber-300' : 'border-red-800 bg-red-950/50 text-red-300'
           }`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
-            {connected ? 'Connected' : 'Offline'}
+            <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : connecting ? 'bg-amber-400 animate-pulse' : 'bg-red-400'}`} />
+            {connected ? 'Connected' : connecting ? 'Connecting…' : 'Offline'}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -83,6 +89,8 @@ export default function App() {
         <div className="flex-1 min-w-0 relative">
           <CityMap
             snapshot={snapshot}
+            connected={connected}
+            connecting={connecting}
             stagingVehicleId={stagingVehicleId}
             selectedVehicleIds={selectedVehicleIds}
             highlightVehicleId={highlightVehicleId}
@@ -111,13 +119,14 @@ export default function App() {
             )}
             {activeTab === 'routing' && (
               <RoutingPanel
-                ruleSet={snapshot.routing_rules ?? { routing_enabled: true, rules: [] }}
+                ruleSet={snapshot.routing_rules ?? { routing_enabled: false, rules: [] }}
                 ruleHits={snapshot.routing_rule_hits ?? []}
+                operatorSetup={operatorSetup}
                 onCommand={sendCommand}
               />
             )}
             {activeTab === 'automation' && (
-              <AutomationPanel policy={snapshot.policy} onCommand={sendCommand} />
+              <AutomationPanel policy={snapshot.policy} operatorSetup={operatorSetup} onCommand={sendCommand} />
             )}
             {activeTab === 'demand' && (
               <DemandPanel
@@ -126,12 +135,18 @@ export default function App() {
                 events={snapshot.special_events ?? []}
                 zoneBalance={snapshot.zone_balance ?? []}
                 currentTimeH={snapshot.current_time_h}
+                operatorSetup={operatorSetup}
                 onCommand={sendCommand}
               />
             )}
             {activeTab === 'activity' && (
               <div className="flex flex-col p-3 pb-4 gap-3">
-                <TripQueuePanel trips={snapshot.trips} />
+                <TripQueuePanel
+                  trips={snapshot.trips}
+                  dispatchCandidates={snapshot.dispatch_candidates ?? {}}
+                  dispatchMode={operatorSetup.dispatch_assignment_mode}
+                  onCommand={sendCommand}
+                />
                 <OpsLogPanel actions={snapshot.recent_dispatch_actions ?? []} simStartIso={snapshot.sim_start_iso} />
               </div>
             )}

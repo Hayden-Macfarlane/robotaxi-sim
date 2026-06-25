@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 
+from core_data.models import DispatchAssignmentMode
 from simulation_loop.manager import SimulationManager
 
 
-def test_snapshot_includes_interpolated_vehicle_position() -> None:
+def test_snapshot_includes_interpolated_vehicle_position(sim_manager: SimulationManager) -> None:
     """Vehicle snapshot should expose lat/lon, heading, and route polyline."""
-    mgr = SimulationManager()
-    mgr.reset(seed=7)
-    mgr.step(0.5)
-    raw = mgr.build_ui_snapshot(is_running=False, speed_multiplier=1)
+    sim_manager.reset(seed=7)
+    sim_manager.step(0.5)
+    raw = sim_manager.build_ui_snapshot(is_running=False, speed_multiplier=1)
     data = json.loads(raw)
     assert len(data["vehicles"]) > 0
     v = data["vehicles"][0]
@@ -23,31 +23,30 @@ def test_snapshot_includes_interpolated_vehicle_position() -> None:
     assert "streets" in data
 
 
-def test_riders_appear_for_pending_trips() -> None:
-    """Pending trips should surface as rider markers in the snapshot."""
-    mgr = SimulationManager()
-    mgr.reset(seed=7)
-    for _ in range(30):
-        mgr.step(0.25)
-    raw = mgr.build_ui_snapshot(is_running=False, speed_multiplier=1)
+def test_riders_appear_for_pending_trips(sim_manager: SimulationManager) -> None:
+    """Trips surface as rider markers in the snapshot after reset."""
+    sim_manager.reset(seed=7)
+    raw = sim_manager.build_ui_snapshot(is_running=False, speed_multiplier=1)
     data = json.loads(raw)
-    pending = [t for t in data["trips"] if t["status"] == "pending"]
-    if pending:
-        assert len(data["riders"]) >= 1
-        rider = data["riders"][0]
-        assert "lat" in rider
-        assert "lon" in rider
+    assert len(data["trips"]) == 2
+    assert len(data["riders"]) == 2
+    rider = data["riders"][0]
+    assert "lat" in rider
+    assert "lon" in rider
 
 
-def test_vehicle_position_changes_during_step() -> None:
+def test_vehicle_position_changes_during_step(sim_manager: SimulationManager) -> None:
     """Sim stepping should eventually move a vehicle from its spawn point."""
-    mgr = SimulationManager()
-    mgr.reset(seed=7)
-    raw0 = json.loads(mgr.build_ui_snapshot(is_running=False, speed_multiplier=1))
+    sim_manager.reset(seed=7)
+    sim_manager.set_operator_setup(
+        dispatch_assignment_mode=DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
+    )
+    raw0 = json.loads(sim_manager.build_ui_snapshot(is_running=False, speed_multiplier=1))
     moved = False
+    raw = raw0
     for _ in range(50):
-        mgr.step(0.5)
-        raw = json.loads(mgr.build_ui_snapshot(is_running=False, speed_multiplier=1))
+        sim_manager.step(0.5)
+        raw = json.loads(sim_manager.build_ui_snapshot(is_running=False, speed_multiplier=1))
         for v in raw["vehicles"]:
             if v["state"] != "idle":
                 moved = True

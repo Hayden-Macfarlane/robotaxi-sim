@@ -19,6 +19,8 @@ class CityRouter:
         self._nodes = {n.id: n for n in nodes}
         self._edges = {e.id: e for e in edges}
         self._adjacency: dict[str, list[RoadEdge]] = defaultdict(list)
+        self._demand_zone_nodes: dict[str, list[str]] | None = None
+        self._geo_bounds: tuple[float, float, float, float] | None = None
         for node_id in self._nodes:
             _ = self._adjacency[node_id]
         for edge in self._edges.values():
@@ -171,6 +173,20 @@ class CityRouter:
             zones[zone].append(node.id)
         return dict(zones)
 
+    def nodes_by_demand_zone(self) -> dict[str, list[str]]:
+        """Group node ids by highway-aligned demand zone (computed once per router)."""
+        if self._demand_zone_nodes is not None:
+            return self._demand_zone_nodes
+        from routing.zones import zone_for_point
+
+        grouped: dict[str, list[str]] = defaultdict(list)
+        for node in self._nodes.values():
+            zone = zone_for_point(node.lat, node.lon)
+            if zone != "unknown":
+                grouped[zone].append(node.id)
+        self._demand_zone_nodes = dict(grouped)
+        return self._demand_zone_nodes
+
     def zone_bounding_boxes(self) -> dict[str, tuple[float, float, float, float]]:
         """Return ``(min_lat, max_lat, min_lon, max_lon)`` per zone label."""
         boxes: dict[str, list[float]] = {}
@@ -185,3 +201,19 @@ class CityRouter:
                 b[2] = min(b[2], node.lon)
                 b[3] = max(b[3], node.lon)
         return {z: (b[0], b[1], b[2], b[3]) for z, b in boxes.items()}
+
+    def geographic_bounds(self) -> tuple[float, float, float, float]:
+        """Return ``(min_lat, max_lat, min_lon, max_lon)`` for the full graph."""
+        if self._geo_bounds is not None:
+            return self._geo_bounds
+        min_lat = min_lon = float("inf")
+        max_lat = max_lon = float("-inf")
+        for node in self._nodes.values():
+            min_lat = min(min_lat, node.lat)
+            max_lat = max(max_lat, node.lat)
+            min_lon = min(min_lon, node.lon)
+            max_lon = max(max_lon, node.lon)
+        if min_lat == float("inf"):
+            min_lat = max_lat = min_lon = max_lon = 0.0
+        self._geo_bounds = (min_lat, max_lat, min_lon, max_lon)
+        return self._geo_bounds

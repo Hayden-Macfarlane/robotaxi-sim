@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from core_data.models import NetworkPolicy
 from simulation_loop.manager import SimulationManager
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ _manager: SimulationManager | None = None
 _sim_playing: bool = False
 _playback_speed: float = 1.0
 _clients: set[WebSocket] = set()
+_pending_manager_reload: bool = False
 TICK_INTERVAL_S: float = 0.1
 # At playback speed 1×, one real second advances one simulation minute.
 PLAYBACK_SIM_MINUTES_PER_REAL_SECOND: float = float(
@@ -44,6 +46,7 @@ MAX_PLAYBACK_SPEED: float = 120.0
 BROADCAST_INTERVAL_S: float = 0.2
 _sim_last_wall: float = 0.0
 _last_broadcast_wall: float = 0.0
+_manager_ready = asyncio.Event()
 
 
 def _sim_dt_hours(playback_speed: float) -> float:
@@ -76,12 +79,74 @@ def _init_manager() -> SimulationManager:
     return mgr
 
 
+def _initializing_snapshot() -> dict[str, object]:
+    """Minimal snapshot while the city graph loads in the background."""
+    return {
+        "type": "STATE_SNAPSHOT",
+        "status": "initializing",
+        "current_time_h": 0,
+        "sim_start_iso": "",
+        "is_running": False,
+        "speed_multiplier": round(_playback_speed, 2),
+        "city": os.environ.get("ROBOTAXI_CITY", "austin"),
+        "policy": NetworkPolicy(
+            auto_dispatch_enabled=False,
+            auto_reposition_enabled=False,
+            post_trip_reposition_enabled=False,
+        ).model_dump(),
+        "kpis": {
+            "avg_wait_min": 0,
+            "p95_wait_min": 0,
+            "fleet_utilization_pct": 0,
+            "trips_completed": 0,
+            "trips_cancelled": 0,
+            "revenue": 0,
+            "pending_trips": 0,
+            "deadhead_ratio": 0,
+            "vehicles_at_depot": 0,
+            "vehicles_on_street": 0,
+            "avg_battery_pct": 100,
+            "avg_condition_pct": 100,
+            "avg_cleanliness_pct": 100,
+            "vehicles_needing_service": 0,
+        },
+        "supply_by_zone": {},
+        "demand_by_zone": {},
+        "operator_setup": {
+            "setup_complete": True,
+            "dispatch_assignment_mode": "closest_idle_or_repositioning",
+            "advanced_automation_enabled": False,
+        },
+        "dispatch_candidates": {},
+        "vehicles": [],
+        "trips": [],
+        "riders": [],
+        "streets": [],
+        "nodes": [],
+        "map_center": {"lat": 30.27, "lon": -97.74},
+    }
+
+
 def _snapshot() -> str:
     if _manager is None:
-        return json.dumps({"type": "STATE_SNAPSHOT", "error": "not initialized"})
+        return json.dumps(_initializing_snapshot())
     return _manager.build_ui_snapshot(
         is_running=_sim_playing,
         speed_multiplier=round(_playback_speed, 2),
+    )
+
+
+async def _snapshot_async() -> str:
+    """Build snapshot off the event loop so routing work does not block I/O."""
+    if _manager is None:
+        return json.dumps(_initializing_snapshot())
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: _manager.build_ui_snapshot(  # type: ignore[union-attr]
+            is_running=_sim_playing,
+            speed_multiplier=round(_playback_speed, 2),
+        ),
     )
 
 
@@ -100,7 +165,7 @@ def _system_alert(message: str, level: str = "error") -> dict[str, str]:
 
 
 def _handle_command(raw: str) -> dict[str, str] | None:
-    global _sim_playing, _playback_speed, _manager
+    global _sim_playing, _playback_speed, _manager, _pending_manager_reload
 
     try:
         cmd: dict[str, object] = json.loads(raw)
@@ -110,6 +175,8 @@ def _handle_command(raw: str) -> dict[str, str] | None:
     cmd_type = str(cmd.get("type", "")).upper()
 
     if cmd_type == "PLAY":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
         _sim_playing = True
         _reset_wall_clock()
         speed_raw = cmd.get("speed")
@@ -128,12 +195,37 @@ def _handle_command(raw: str) -> dict[str, str] | None:
     elif cmd_type == "STEP":
         hours_raw = cmd.get("hours", 1.0)
         hours = float(hours_raw) if isinstance(hours_raw, (int, float)) else 1.0
-        if _manager is not None:
-            _manager.step(hours)
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        _manager.step(hours)
+
+    elif cmd_type == "SET_OPERATOR_SETUP":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        from core_data.models import DispatchAssignmentMode
+
+        mode_raw = cmd.get("dispatch_assignment_mode")
+        mode: DispatchAssignmentMode | None = None
+        if isinstance(mode_raw, str) and mode_raw:
+            try:
+                mode = DispatchAssignmentMode(mode_raw)
+            except ValueError:
+                return _system_alert(f"Unknown dispatch mode: {mode_raw}")
+        advanced_raw = cmd.get("advanced_automation_enabled")
+        advanced = advanced_raw if isinstance(advanced_raw, bool) else None
+        if mode is None and advanced is None:
+            return _system_alert("SET_OPERATOR_SETUP requires dispatch_assignment_mode or advanced_automation_enabled.")
+        _manager.set_operator_setup(
+            dispatch_assignment_mode=mode,
+            advanced_automation_enabled=advanced,
+        )
 
     elif cmd_type == "RESET_SIMULATION":
         _sim_playing = False
-        _manager = _init_manager()
+        _manager = None
+        _manager_ready.clear()
+        _pending_manager_reload = True
+        return _system_alert("Resetting simulation…", level="info")
 
     elif cmd_type == "SET_NETWORK_POLICY":
         if _manager is None:
@@ -197,9 +289,17 @@ def _handle_command(raw: str) -> dict[str, str] | None:
     elif cmd_type == "RESET_ROUTING_RULES":
         if _manager is None:
             return _system_alert("Simulation not initialized.")
-        from fleet_routing.defaults import default_routing_rules
+        from fleet_routing.defaults import default_routing_rules, dispatch_only_rules
 
-        _manager.set_routing_rules(default_routing_rules())
+        setup = _manager.state.operator_setup
+        if setup.advanced_automation_enabled:
+            _manager.set_routing_rules(default_routing_rules())
+        elif setup.dispatch_assignment_mode is not None and setup.dispatch_assignment_mode.value != "manual":
+            _manager.set_routing_rules(dispatch_only_rules(setup.dispatch_assignment_mode))
+        else:
+            from fleet_routing.defaults import manual_first_routing_rules
+
+            _manager.set_routing_rules(manual_first_routing_rules())
 
     elif cmd_type == "DISPATCH_VEHICLE":
         if _manager is None:
@@ -294,7 +394,7 @@ async def simulation_loop_task() -> None:
             if dt_h > 0.0:
                 _manager.step(dt_h)
             if now - _last_broadcast_wall >= BROADCAST_INTERVAL_S:
-                await _broadcast(_snapshot())
+                await _broadcast(await _snapshot_async())
                 _last_broadcast_wall = now
         except Exception:
             logger.exception("Simulation tick failed")
@@ -302,25 +402,63 @@ async def simulation_loop_task() -> None:
             _reset_wall_clock()
 
 
+@app.get("/health")
+async def health() -> dict[str, bool | str]:
+    """Liveness probe; ``ready`` when the simulation world has finished loading."""
+    return {"ok": True, "ready": _manager is not None}
+
+
+async def _init_manager_background() -> None:
+    """Load the city graph without blocking the event loop (~30s for Austin)."""
+    global _manager
+    loop = asyncio.get_running_loop()
+    logger.info("Loading simulation world…")
+    mgr = await loop.run_in_executor(None, _init_manager)
+    _manager = mgr
+    _manager_ready.set()
+    logger.info("Simulation world ready")
+    if _clients:
+        await _broadcast(await _snapshot_async())
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
-    global _manager
-    _manager = _init_manager()
+    asyncio.create_task(_init_manager_background())
     asyncio.create_task(simulation_loop_task())
+
+
+async def _ws_send_text(ws: WebSocket, text: str) -> bool:
+    """Send on a WebSocket; return False if the client already disconnected."""
+    try:
+        await ws.send_text(text)
+        return True
+    except Exception:
+        return False
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
+    global _pending_manager_reload
+
     await ws.accept()
     _clients.add(ws)
-    await ws.send_text(_snapshot())
     try:
+        if _manager is None:
+            if not await _ws_send_text(ws, json.dumps(_initializing_snapshot())):
+                return
+            await _manager_ready.wait()
+        if not await _ws_send_text(ws, await _snapshot_async()):
+            return
         while True:
             raw = await ws.receive_text()
             alert = _handle_command(raw)
+            if _pending_manager_reload:
+                _pending_manager_reload = False
+                asyncio.create_task(_init_manager_background())
             if alert is not None:
-                await ws.send_text(json.dumps(alert))
-            await _broadcast(_snapshot())
+                if not await _ws_send_text(ws, json.dumps(alert)):
+                    break
+            await _broadcast(await _snapshot_async())
     except WebSocketDisconnect:
         pass
     finally:

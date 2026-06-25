@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core_data.models import DispatchAssignmentMode
 from fleet_routing.models import (
     ActionType,
     CompareOp,
@@ -12,6 +13,42 @@ from fleet_routing.models import (
     RoutingRuleSet,
     RulePhase,
 )
+
+
+def manual_first_routing_rules() -> RoutingRuleSet:
+    """Return an empty playbook used on reset before operator setup."""
+    return RoutingRuleSet(routing_enabled=False, rules=[])
+
+
+def dispatch_only_rules(mode: DispatchAssignmentMode) -> RoutingRuleSet:
+    """Return a single dispatch rule for basic auto-assign modes."""
+    if mode == DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING:
+        action = RoutingAction(type=ActionType.ASSIGN_NEAREST_IDLE_OR_REPOSITIONING)
+        name = "Closest idle or repositioning"
+    elif mode == DispatchAssignmentMode.CLOSEST_IDLE:
+        action = RoutingAction(type=ActionType.ASSIGN_NEAREST_ELIGIBLE)
+        name = "Closest idle vehicle"
+    else:
+        return manual_first_routing_rules()
+    return RoutingRuleSet(
+        routing_enabled=True,
+        rules=[
+            RoutingRule(
+                id="rule-serve-pending",
+                name=name,
+                priority=10,
+                phase=RulePhase.DISPATCH,
+                conditions=[
+                    RoutingCondition(
+                        type=ConditionType.PENDING_TRIPS,
+                        operator=CompareOp.GTE,
+                        value=1.0,
+                    ),
+                ],
+                action=action,
+            ),
+        ],
+    )
 
 
 def default_routing_rules() -> RoutingRuleSet:

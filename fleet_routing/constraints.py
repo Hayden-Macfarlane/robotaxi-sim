@@ -23,9 +23,17 @@ def reposition_within_max_travel(travel_min: float, policy: NetworkPolicy) -> bo
     return travel_min <= policy.max_reposition_min
 
 
-def vehicle_eligible_for_dispatch(vehicle: Vehicle, policy: NetworkPolicy) -> bool:
+def vehicle_eligible_for_dispatch(
+    vehicle: Vehicle,
+    policy: NetworkPolicy,
+    *,
+    include_repositioning: bool = False,
+) -> bool:
     """Return True if vehicle can accept a trip assignment."""
-    return vehicle.state == VehicleState.IDLE and is_dispatch_eligible(vehicle, policy)
+    allowed = {VehicleState.IDLE}
+    if include_repositioning:
+        allowed.add(VehicleState.REPOSITIONING)
+    return vehicle.state in allowed and is_dispatch_eligible(vehicle, policy)
 
 
 def vehicle_eligible_for_reposition(

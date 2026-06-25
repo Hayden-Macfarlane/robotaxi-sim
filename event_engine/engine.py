@@ -66,3 +66,24 @@ class SimulationEngine:
         if not self._event_queue:
             return None
         return self._event_queue[0].timestamp
+
+    def cancel_events_for_entity(
+        self,
+        entity_id: str,
+        *,
+        event_type: EventType | None = None,
+    ) -> int:
+        """Remove queued events for ``entity_id``; optionally filter by ``event_type``."""
+        kept: list[Event] = []
+        removed = 0
+        for event in self._event_queue:
+            if event.entity_id == entity_id and (
+                event_type is None or event.event_type == event_type
+            ):
+                removed += 1
+                continue
+            kept.append(event)
+        if removed:
+            heapq.heapify(kept)
+            self._event_queue = kept
+        return removed

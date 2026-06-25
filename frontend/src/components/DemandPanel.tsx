@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ForecastSnap, NetworkPolicySnap, SimCommand, SpecialEventSnap, ZoneBalanceSnap } from '../types/simulation'
+import type { ForecastSnap, NetworkPolicySnap, OperatorSetupSnap, SimCommand, SpecialEventSnap, ZoneBalanceSnap } from '../types/simulation'
 import { ZONES } from '../types/routing'
 import { PanelSection } from './ui/PanelSection'
 
@@ -9,6 +9,7 @@ interface Props {
   events: SpecialEventSnap[]
   zoneBalance: ZoneBalanceSnap[]
   currentTimeH: number
+  operatorSetup: OperatorSetupSnap
   onCommand: (cmd: SimCommand) => void
 }
 
@@ -17,7 +18,7 @@ function formatZoneLabel(zone: string): string {
 }
 
 /** Pricing, zone caps, minimum fleet per zone, vehicle wear, and demand forecast controls. */
-export function DemandPanel({ policy, forecast, events, zoneBalance, currentTimeH, onCommand }: Props) {
+export function DemandPanel({ policy, forecast, events, zoneBalance, currentTimeH, operatorSetup, onCommand }: Props) {
   const [surge, setSurge] = useState(String(policy.surge_multiplier))
   const [fleet, setFleet] = useState(String(policy.fleet_size))
   const [maxIdle, setMaxIdle] = useState(String(policy.max_idle_per_zone))
@@ -74,11 +75,17 @@ export function DemandPanel({ policy, forecast, events, zoneBalance, currentTime
   }
 
   const targetTotal = ZONES.reduce((sum, z) => sum + (parseInt(zoneTargets[z] || '0', 10) || 0), 0)
+  const advanced = operatorSetup.advanced_automation_enabled
 
   return (
     <div className="p-3 pb-4">
       <PanelSection title="Demand">
-        <div className="p-3 space-y-4">
+        {!advanced && (
+          <div className="px-3 pt-3 text-xs text-text-secondary italic">
+            Zone minimums and event scheduling unlock with advanced automation.
+          </div>
+        )}
+        <div className={`p-3 space-y-4 ${advanced ? '' : 'opacity-40 pointer-events-none select-none'}`}>
           <section className="space-y-2">
             <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">Pricing</h3>
             <label className="block space-y-1">

@@ -14,6 +14,7 @@ export type ConditionType =
 
 export type ActionType =
   | 'assign_nearest_eligible'
+  | 'assign_nearest_idle_or_repositioning'
   | 'assign_prefer_zone'
   | 'reposition_to_best_deficit'
   | 'reposition_to_zone'
@@ -73,6 +74,7 @@ export const CONDITION_LABELS: Record<ConditionType, string> = {
 
 export const ACTION_LABELS: Record<ActionType, string> = {
   assign_nearest_eligible: 'Assign nearest eligible vehicle',
+  assign_nearest_idle_or_repositioning: 'Assign nearest idle or repositioning vehicle',
   assign_prefer_zone: 'Prefer vehicle already in zone',
   reposition_to_best_deficit: 'Reposition to highest-need zone',
   reposition_to_zone: 'Reposition to specific zone',

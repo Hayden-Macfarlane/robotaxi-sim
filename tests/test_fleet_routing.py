@@ -49,7 +49,7 @@ def test_default_rules_include_dispatch_and_reposition() -> None:
 def test_dispatch_rule_matches_pending_trip() -> None:
     """Serve waiting riders rule assigns nearest eligible vehicle."""
     router = load_fixture_router()
-    ctx = _ctx(pending={"central": 1})
+    ctx = _ctx(pending={"southwest": 1})
     trip = TripRequest(
         id="trip-1",
         origin=GeoPoint(lat=30.20, lon=-97.80),

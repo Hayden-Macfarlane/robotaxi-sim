@@ -63,12 +63,9 @@ class RoutingContext:
         return vehicle_zone(vehicle, self.router)
 
     def trip_zone(self, trip: TripRequest) -> str:
-        """Resolve pickup zone for ``trip``."""
+        """Resolve pickup zone for ``trip`` (highway-aligned demand zone)."""
         from routing.zones import zone_for_point
 
-        node = self.router.get_node(trip.origin_snap_node_id)
-        if node is not None and node.zone:
-            return node.zone
         return zone_for_point(trip.origin.lat, trip.origin.lon)
 
     def _cap_for_zone(self, zone: str) -> int:

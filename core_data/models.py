@@ -162,10 +162,26 @@ class DispatchAction(BaseModel):
     to_lon: float | None = None
 
 
+class DispatchAssignmentMode(StrEnum):
+    """How pending trips are matched to vehicles after operator setup."""
+
+    MANUAL = "manual"
+    CLOSEST_IDLE_OR_REPOSITIONING = "closest_idle_or_repositioning"
+    CLOSEST_IDLE = "closest_idle"
+
+
+class OperatorSetup(BaseModel):
+    """Required operator choices before the simulation may advance."""
+
+    setup_complete: bool = False
+    dispatch_assignment_mode: DispatchAssignmentMode | None = None
+    advanced_automation_enabled: bool = False
+
+
 class NetworkPolicy(BaseModel):
     """Manager-controlled network and pricing levers."""
 
-    fleet_size: int = Field(default=12, ge=1, le=200)
+    fleet_size: int = Field(default=14, ge=1, le=200)
     base_fare: float = Field(default=8.0, ge=0.0)
     surge_multiplier: float = Field(default=1.0, ge=0.5, le=5.0)
     reposition_idle_min: float = Field(default=15.0, ge=1.0)
@@ -184,7 +200,7 @@ class NetworkPolicy(BaseModel):
     value_per_trip: float = Field(default=2.0, ge=0.0)
     manual_hold_min: float = Field(default=60.0, ge=5.0)
     depot_release_enabled: bool = True
-    min_depot_buffer: int = Field(default=2, ge=0)
+    min_depot_buffer: int = Field(default=0, ge=0)
     proactive_staging_enabled: bool = True
     battery_drain_per_km: float = Field(default=0.4, ge=0.0)
     low_battery_pct: float = Field(default=20.0, ge=5.0, le=50.0)

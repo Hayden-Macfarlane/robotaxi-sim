@@ -37,24 +37,20 @@ def test_depot_vehicles_excluded_from_dispatch() -> None:
     assert match.vehicle_id == "v-street"
 
 
-def test_release_from_facility_returns_idle() -> None:
-    mgr = SimulationManager()
-    mgr.reset(seed=1)
-    vehicle = next(iter(mgr.state.vehicles.values()))
+def test_release_from_facility_returns_idle(sim_manager: SimulationManager) -> None:
+    vehicle = next(iter(sim_manager.state.vehicles.values()))
     vehicle.state = VehicleState.AT_DEPOT
     vehicle.facility_id = "depot-main"
-    err = mgr.release_from_facility(vehicle.id)
+    err = sim_manager.release_from_facility(vehicle.id)
     assert err is None
     assert vehicle.state == VehicleState.IDLE
     assert vehicle.facility_id is None
 
 
-def test_manual_hold_blocks_auto_reposition() -> None:
-    mgr = SimulationManager()
-    mgr.reset(seed=2)
-    vehicle = next(v for v in mgr.state.vehicles.values() if v.state == VehicleState.IDLE)
-    vehicle.manual_hold_until_h = mgr.current_time + 10.0
-    vehicle.idle_since_h = mgr.current_time - 1.0
+def test_manual_hold_blocks_auto_reposition(sim_manager: SimulationManager) -> None:
+    vehicle = next(v for v in sim_manager.state.vehicles.values() if v.state == VehicleState.IDLE)
+    vehicle.manual_hold_until_h = sim_manager.current_time + 10.0
+    vehicle.idle_since_h = sim_manager.current_time - 1.0
     before = vehicle.lat
-    mgr._apply_routing_rules()
+    sim_manager._apply_routing_rules()
     assert vehicle.lat == before

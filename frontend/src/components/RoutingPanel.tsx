@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react'
-import type { SimCommand } from '../types/simulation'
+import type { OperatorSetupSnap, SimCommand } from '../types/simulation'
 import type { RoutingRule, RoutingRuleHit, RoutingRuleSet, RulePhase } from '../types/routing'
 import { ACTION_LABELS, CONDITION_LABELS } from '../types/routing'
 import { RuleEditor } from './RuleEditor'
 import { PanelSection } from './ui/PanelSection'
 
+const MODE_SUMMARY: Record<string, string> = {
+  manual: 'Manual assignment — no auto-dispatch rules',
+  closest_idle_or_repositioning: 'Auto-assign: closest idle or repositioning vehicle',
+  closest_idle: 'Auto-assign: closest idle vehicle only',
+}
+
 interface Props {
   ruleSet: RoutingRuleSet
   ruleHits: RoutingRuleHit[]
+  operatorSetup: OperatorSetupSnap
   onCommand: (cmd: SimCommand) => void
 }
 
@@ -31,9 +38,11 @@ function nextRuleId(rules: RoutingRule[]): string {
 }
 
 /** Operator routing rule builder. */
-export function RoutingPanel({ ruleSet, ruleHits, onCommand }: Props) {
+export function RoutingPanel({ ruleSet, ruleHits, operatorSetup, onCommand }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [localRules, setLocalRules] = useState<RoutingRule[]>(ruleSet.rules)
+  const advanced = operatorSetup.advanced_automation_enabled
+  const mode = operatorSetup.dispatch_assignment_mode
 
   useEffect(() => {
     setLocalRules(ruleSet.rules)
@@ -92,6 +101,15 @@ export function RoutingPanel({ ruleSet, ruleHits, onCommand }: Props) {
 
   return (
     <div className="p-3 pb-4 space-y-4 overflow-y-auto h-full">
+      {!advanced && mode && (
+        <div className="px-3 py-2 text-xs text-text-secondary bg-surface-raised/50 border border-border-default rounded-lg">
+          <span className="text-text-primary font-medium">Active policy: </span>
+          {MODE_SUMMARY[mode] ?? mode}
+          <p className="mt-1 italic">Enable advanced automation in the Auto tab to edit routing rules.</p>
+        </div>
+      )}
+
+      <div className={advanced ? '' : 'opacity-40 pointer-events-none select-none'}>
       <PanelSection title="Routing strategy">
         <div className="p-3 space-y-3">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -169,8 +187,9 @@ export function RoutingPanel({ ruleSet, ruleHits, onCommand }: Props) {
           </div>
         </div>
       </PanelSection>
+      </div>
 
-      {ruleHits.length > 0 && (
+      {advanced && ruleHits.length > 0 && (
         <PanelSection title="Recent rule hits" count={ruleHits.length}>
           <div className="p-2 max-h-32 overflow-y-auto space-y-1">
             {[...ruleHits].reverse().slice(0, 8).map((hit, i) => (

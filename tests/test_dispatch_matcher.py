@@ -4,16 +4,14 @@ from __future__ import annotations
 
 from core_data.models import GeoPoint, TripRequest, TripStatus, Vehicle, VehicleState
 from dispatch.matcher import pick_best_vehicle
-from routing.city_loader import load_city_graph
-from routing.city_router import CityRouter
+from fixture_loader import load_fixture_router
 
 
 def test_picks_nearest_idle_vehicle() -> None:
     """Matcher should prefer the vehicle closest to trip origin."""
-    nodes, edges = load_city_graph("austin")
-    router = CityRouter(nodes, edges)
-    origin_node = nodes[0]
-    far_node = nodes[-1]
+    router = load_fixture_router()
+    origin_node = router.nodes["n-a"]
+    far_node = router.nodes["n-d"]
     trip = TripRequest(
         id="t1",
         origin=GeoPoint(lat=origin_node.lat, lon=origin_node.lon),

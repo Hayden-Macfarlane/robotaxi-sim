@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -10,8 +11,10 @@ from zoneinfo import ZoneInfo
 
 from core_data.models import (
     DispatchAction,
+    DispatchAssignmentMode,
     GeoPoint,
     NetworkPolicy,
+    OperatorSetup,
     RouteLeg,
     SpecialEvent,
     TripRequest,
@@ -20,6 +23,7 @@ from core_data.models import (
     VehicleState,
 )
 from demand import DemandGenerator
+from dispatch.matcher import rank_dispatch_candidates
 from dispatch.reposition import (
     expected_demand_by_zone,
     forecast_snapshot,
@@ -28,6 +32,11 @@ from dispatch.reposition import (
     zone_cap,
 )
 from fleet_routing.context import build_routing_context
+from fleet_routing.defaults import (
+    default_routing_rules,
+    dispatch_only_rules,
+    manual_first_routing_rules,
+)
 from fleet_routing.engine import RuleEvaluator
 from fleet_routing.models import ActionType, RoutingRuleSet
 from fleet.health import (
@@ -42,11 +51,12 @@ from fleet.health import (
 )
 from event_engine.engine import Event, EventType, SimulationEngine
 from routing.city_router import CityRouter
-from routing.zones import zone_for_point, zone_overlay_snapshot
+from routing.zones import zone_for_point, zone_overlay_snapshot, all_zone_names
 from simulation_loop.state import SimulationState
 from simulation_loop.world_builder import build_world
 
 DEMAND_TICK_HOURS = 0.25
+INITIAL_PENDING_TRIPS = 2
 MINUTES_PER_HOUR = 60.0
 MAX_STREET_LINES_IN_SNAPSHOT = 4000
 MAX_DISPATCH_LOG = 50
@@ -68,7 +78,7 @@ class SimulationManager:
     _trip_counter: int = 0
     _event_counter: int = 0
     _city: str = "austin"
-    _street_lines: list[list[list[float]]] = field(default_factory=list)
+    _street_lines: list[list[list[float]]] | None = field(default=None)
     _staging_claims: set[tuple[float, float]] = field(default_factory=set)
     _sim_start: datetime = field(default_factory=lambda: DEFAULT_SIM_START)
 
@@ -95,18 +105,88 @@ class SimulationManager:
 
     def reset(self, *, city: str | None = None, seed: int = 42) -> None:
         """Rebuild world and reschedule periodic demand ticks."""
-        self._city = city or self._city
+        if city is not None:
+            self._city = city
+        else:
+            self._city = os.environ.get("ROBOTAXI_CITY", "austin")
         self._engine = SimulationEngine(initial_time=0.0)
         self._rng = random.Random(seed)
         self._demand.set_seed(seed)
         self._trip_counter = 0
         self._event_counter = 0
         self._router, self._state = build_world(city=self._city, seed=seed)
+        self._apply_startup_defaults()
         self._demand.set_events(self._state.special_events)
-        self._street_lines = self._build_street_lines()
+        self._street_lines: list[list[list[float]]] | None = None
         self._staging_claims = set()
         self._sim_start = DEFAULT_SIM_START
+        self._seed_initial_trips(INITIAL_PENDING_TRIPS)
         self._schedule_demand_tick(self._engine.current_time + DEMAND_TICK_HOURS)
+        self._apply_routing_rules()
+
+    def _apply_startup_defaults(self) -> None:
+        """Reset policy to auto-dispatch closest idle/repositioning vehicles on startup."""
+        self._state.policy = self._state.policy.model_copy(
+            update={
+                "auto_reposition_enabled": False,
+                "post_trip_reposition_enabled": False,
+            },
+        )
+        self.set_operator_setup(
+            dispatch_assignment_mode=DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
+            advanced_automation_enabled=False,
+        )
+
+    def set_operator_setup(
+        self,
+        *,
+        dispatch_assignment_mode: DispatchAssignmentMode | None = None,
+        advanced_automation_enabled: bool | None = None,
+    ) -> None:
+        """Apply operator setup choices and configure dispatch automation."""
+        setup = self._state.operator_setup.model_copy()
+        if dispatch_assignment_mode is not None:
+            setup.dispatch_assignment_mode = dispatch_assignment_mode
+            setup.setup_complete = True
+            if dispatch_assignment_mode == DispatchAssignmentMode.MANUAL:
+                self._state.policy = self._state.policy.model_copy(
+                    update={"auto_dispatch_enabled": False},
+                )
+                self._state.routing_rules = manual_first_routing_rules()
+            elif dispatch_assignment_mode == DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING:
+                self._state.policy = self._state.policy.model_copy(
+                    update={"auto_dispatch_enabled": True},
+                )
+                self._state.routing_rules = dispatch_only_rules(dispatch_assignment_mode)
+            elif dispatch_assignment_mode == DispatchAssignmentMode.CLOSEST_IDLE:
+                self._state.policy = self._state.policy.model_copy(
+                    update={"auto_dispatch_enabled": True},
+                )
+                self._state.routing_rules = dispatch_only_rules(dispatch_assignment_mode)
+        if advanced_automation_enabled is not None:
+            setup.advanced_automation_enabled = advanced_automation_enabled
+            if advanced_automation_enabled and setup.dispatch_assignment_mode is not None:
+                if setup.dispatch_assignment_mode == DispatchAssignmentMode.MANUAL:
+                    self._state.routing_rules = manual_first_routing_rules()
+                else:
+                    self._state.routing_rules = default_routing_rules()
+                    mode = setup.dispatch_assignment_mode
+                    if mode in (
+                        DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
+                        DispatchAssignmentMode.CLOSEST_IDLE,
+                    ):
+                        dispatch_rule = dispatch_only_rules(mode).rules[0]
+                        rules = self._state.routing_rules.rules
+                        for i, rule in enumerate(rules):
+                            if rule.phase.value == "dispatch" and rule.id == "rule-serve-pending":
+                                rules[i] = dispatch_rule
+                                break
+        self._state.operator_setup = setup
+
+    @property
+    def setup_complete(self) -> bool:
+        """Return True when operator has completed required setup."""
+        return self._state.operator_setup.setup_complete
 
     def _sim_datetime(self, hours: float) -> datetime:
         """Wall-clock time for a simulation hour offset from reset."""
@@ -122,6 +202,12 @@ class SimulationManager:
             if len(lines) >= MAX_STREET_LINES_IN_SNAPSHOT:
                 break
         return lines
+
+    def _street_lines_snapshot(self) -> list[list[list[float]]]:
+        """Return cached street polylines, building on first snapshot request."""
+        if self._street_lines is None:
+            self._street_lines = self._build_street_lines()
+        return self._street_lines
 
     def step(self, hours: float) -> None:
         """Advance simulation by ``hours`` and process all due events."""
@@ -225,10 +311,16 @@ class SimulationManager:
             return f"Unknown trip '{trip_id}'."
         if trip.status != TripStatus.PENDING:
             return f"Trip '{trip_id}' is not pending."
-        if vehicle.state != VehicleState.IDLE:
-            return f"Vehicle '{vehicle_id}' is not idle."
+        if vehicle.state not in (VehicleState.IDLE, VehicleState.REPOSITIONING):
+            return f"Vehicle '{vehicle_id}' is not available."
         if not is_dispatch_eligible(vehicle, self._state.policy):
             return f"Vehicle '{vehicle_id}' is not fit for dispatch (health)."
+        if vehicle.state == VehicleState.REPOSITIONING:
+            self._clear_leg(vehicle)
+            self._engine.cancel_events_for_entity(
+                vehicle.id,
+                event_type=EventType.VEHICLE_ARRIVE,
+            )
         self._assign_trip(vehicle, trip)
         return None
 
@@ -315,6 +407,7 @@ class SimulationManager:
             pending_by_zone=demand,
             events=events,
         )
+        dispatch_candidates = self._dispatch_candidates_snapshot()
         payload = {
             "type": "STATE_SNAPSHOT",
             "current_time_h": round(t, 5),
@@ -357,6 +450,8 @@ class SimulationManager:
             "routing_rule_hits": [
                 h.model_dump() for h in self._state.routing_rule_hits[-MAX_ROUTING_RULE_HITS:]
             ],
+            "operator_setup": self._state.operator_setup.model_dump(),
+            "dispatch_candidates": dispatch_candidates,
             "vehicles": [self._vehicle_snapshot(v) for v in self._state.vehicles.values()],
             "trips": [
                 tr.model_dump()
@@ -364,13 +459,60 @@ class SimulationManager:
                 if tr.status in (TripStatus.PENDING, TripStatus.MATCHED, TripStatus.IN_PROGRESS)
             ],
             "riders": self._rider_snapshots(),
-            "streets": self._street_lines,
-            "nodes": [
-                {"id": n.id, "lat": n.lat, "lon": n.lon, "zone": n.zone}
-                for n in self._router.nodes.values()
-            ],
+            "streets": self._street_lines_snapshot(),
+            "nodes": [],
+            "map_bounds": self._map_bounds_snapshot(),
+            "map_center": self._map_center_snapshot(),
         }
         return json.dumps(payload)
+
+    def _map_bounds_snapshot(self) -> dict[str, float]:
+        """Geographic bounds for map fit (avoids sending every node to the UI)."""
+        min_lat, max_lat, min_lon, max_lon = self._router.geographic_bounds()
+        return {
+            "south": min_lat,
+            "north": max_lat,
+            "west": min_lon,
+            "east": max_lon,
+        }
+
+    def _map_center_snapshot(self) -> dict[str, float]:
+        """Map center derived from graph bounds."""
+        min_lat, max_lat, min_lon, max_lon = self._router.geographic_bounds()
+        return {
+            "lat": (min_lat + max_lat) / 2.0,
+            "lon": (min_lon + max_lon) / 2.0,
+        }
+
+    def _dispatch_candidates_snapshot(self) -> dict[str, list[dict[str, object]]]:
+        """Ranked vehicle options for each pending trip (manual mode UI only)."""
+        setup = self._state.operator_setup
+        if not setup.setup_complete or setup.dispatch_assignment_mode != DispatchAssignmentMode.MANUAL:
+            return {}
+        include_repositioning = True
+        result: dict[str, list[dict[str, object]]] = {}
+        pol = self._state.policy
+        for trip in self._state.trips.values():
+            if trip.status != TripStatus.PENDING:
+                continue
+            ranked = rank_dispatch_candidates(
+                trip,
+                self._state.vehicles,
+                self._router,
+                surge_multiplier=pol.surge_multiplier,
+                policy=pol,
+                include_repositioning=include_repositioning,
+                use_fast_eta=True,
+            )
+            result[trip.id] = [
+                {
+                    "vehicle_id": c.vehicle_id,
+                    "eta_min": round(c.eta_min, 2),
+                    "state": c.state.value,
+                }
+                for c in ranked
+            ]
+        return result
 
     def _vehicle_geo_at_time(self, vehicle: Vehicle) -> tuple[GeoPoint, float]:
         """Interpolate vehicle position and heading along its active route leg."""
@@ -456,6 +598,10 @@ class SimulationManager:
     ) -> None:
         """Schedule a routed leg and store street geometry on the vehicle."""
         now = self._engine.current_time
+        self._engine.cancel_events_for_entity(
+            vehicle.id,
+            event_type=EventType.VEHICLE_ARRIVE,
+        )
         vehicle.active_route_edges = list(route.edge_ids)
         vehicle.active_route_geometry = list(route.geometry)
         vehicle.leg_started_at_h = now
@@ -477,6 +623,43 @@ class SimulationManager:
                 payload=event_payload,
             ),
         )
+
+    def _seed_initial_trips(self, count: int) -> None:
+        """Create pending trip requests at sim start (riders waiting on the map)."""
+        zones = all_zone_names()
+        if not zones or count <= 0:
+            return
+        pol = self._state.policy
+        created = 0
+        for i in range(count):
+            for _ in range(40):
+                origin_zone = zones[i % len(zones)]
+                dest_zone = self._rng.choice(zones)
+                origin = self._demand._random_point_in_zone(self._router, origin_zone)
+                dest = self._demand._random_point_in_zone(self._router, dest_zone)
+                if origin is None or dest is None:
+                    continue
+                if origin.lat == dest.lat and origin.lon == dest.lon:
+                    continue
+                route = self._router.route_between(origin.lat, origin.lon, dest.lat, dest.lon)
+                if route is None:
+                    continue
+                origin_snap_id, _ = self._router.snap_point(origin.lat, origin.lon)
+                dest_snap_id, _ = self._router.snap_point(dest.lat, dest.lon)
+                self._trip_counter += 1
+                tid = f"trip-{self._trip_counter:05d}"
+                fare = pol.base_fare * pol.surge_multiplier + route.travel_time_min * 0.15
+                self._state.trips[tid] = TripRequest(
+                    id=tid,
+                    origin=origin,
+                    destination=dest,
+                    origin_snap_node_id=origin_snap_id,
+                    destination_snap_node_id=dest_snap_id,
+                    requested_at_h=0.0,
+                    fare_estimate=round(fare, 2),
+                )
+                created += 1
+                break
 
     def _schedule_demand_tick(self, at_h: float) -> None:
         self._engine.schedule_event(
@@ -606,6 +789,12 @@ class SimulationManager:
             self._state.routing_rule_hits = self._state.routing_rule_hits[-MAX_ROUTING_RULE_HITS:]
 
     def _assign_trip(self, vehicle: Vehicle, trip: TripRequest) -> None:
+        if vehicle.state == VehicleState.REPOSITIONING:
+            self._clear_leg(vehicle)
+            self._engine.cancel_events_for_entity(
+                vehicle.id,
+                event_type=EventType.VEHICLE_ARRIVE,
+            )
         route = self._router.route_between(
             vehicle.lat,
             vehicle.lon,

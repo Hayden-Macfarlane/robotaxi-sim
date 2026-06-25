@@ -64,7 +64,7 @@ def restore_after_service(vehicle: Vehicle, facility_kind: str) -> None:
 
 def is_dispatch_eligible(vehicle: Vehicle, policy: NetworkPolicy) -> bool:
     """Return True if vehicle may accept a new trip."""
-    if vehicle.state != VehicleState.IDLE:
+    if vehicle.state not in (VehicleState.IDLE, VehicleState.REPOSITIONING):
         return False
     if vehicle.battery_pct <= policy.low_battery_pct:
         return False

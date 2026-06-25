@@ -12,7 +12,7 @@ Single-city robotaxi fleet manager: spawn trip demand, auto-dispatch idle vehicl
 |-------|----------|---------|
 | Schemas | `core_data/models.py` | Pydantic only |
 | Scheduler | `event_engine/` | Heap queue, no domain |
-| Routing | `routing/` | Graph load + Dijkstra + Austin neighborhood zones |
+| Routing | `routing/` | Graph load + Dijkstra + highway-aligned Austin zone polygons |
 | Demand | `demand/` | Trip spawn + forecast curves |
 | Dispatch | `dispatch/` | Vehicle–trip matching helpers |
 | Fleet routing | `fleet_routing/` | Operator rule engine (dispatch + reposition) |
@@ -25,7 +25,8 @@ Single-city robotaxi fleet manager: spawn trip demand, auto-dispatch idle vehicl
 
 - `PLAY` / `PAUSE` / `STEP` — time control (`PLAY` accepts optional `speed`; default 1× = 1 sim minute per real second)
 - `SET_PLAYBACK_SPEED` — `{ speed }` multiplier (0.25–120×) without toggling play/pause
-- `RESET_SIMULATION` — rebuild world
+- `RESET_SIMULATION` — rebuild world (manual dispatch by default; change mode in Auto tab)
+- `SET_OPERATOR_SETUP` — `{ dispatch_assignment_mode?, advanced_automation_enabled? }` switch dispatch policy anytime
 - `SET_NETWORK_POLICY` — surge, fleet_size, caps, ROI gates, depot release, battery, etc.
 - `SET_ROUTING_RULES` — `{ rules[], routing_enabled? }` operator routing playbook
 - `RESET_ROUTING_RULES` — restore default routing playbook
@@ -45,13 +46,35 @@ Single-city robotaxi fleet manager: spawn trip demand, auto-dispatch idle vehicl
 
 Do not add dependencies on `logistics-sim`. Copied files (e.g. `event_engine`) diverge freely in this repo.
 
+## Local dev launcher
+
+- Default city: **`austin`** (full OSM graph; ~30s first load). Tests override to `mini_austin` via [`tests/conftest.py`](tests/conftest.py).
+- Double-click **`Start Robotaxi Sim.command`** — foreground supervisor; keeps terminal open and **auto-restarts** backend/frontend if they are stopped externally
+- **`./scripts/reload-local.sh`** — stop services only (agent use after code changes); the user's launcher terminal will restart them within ~2s
+- Do **not** run `start-local.sh --detach` while the user has the `.command` launcher open — use `reload-local.sh` instead
+
+## Testing
+
+- **Fast (default):** `pytest` — uses `mini_austin` graph via `tests/conftest.py`; skips `@pytest.mark.slow` tests
+- **Full Austin accuracy:** `pytest -m slow` — zone placement and large-graph router tests (~30s each)
+- **Everything:** `pytest -m ""` — runs fast + slow suites
+
+Graph and router instances are cached per process (`load_city_graph`, `get_city_router`); repeated `mgr.reset()` in tests reuses the parsed graph.
+
+`SimulationManager.reset()` respects `ROBOTAXI_CITY` when no explicit `city=` is passed (tests set `mini_austin` in `conftest.py`). Production defaults to `austin`.
+
+Fast tests fail after **30s** (`pytest-timeout`); `@pytest.mark.slow` tests allow **120s** for full-Austin cases.
+
 ## When to update this file
 
 New package, command, snapshot field, or panel → update AGENTS.md and README.md in the same change.
 
 ## Ops features
 
-- **Routing rule engine** (`fleet_routing/`): unified dispatch + reposition via prioritized IF/THEN rules; default playbook on reset
+- **Manual-first reset**: manual dispatch by default; Auto tab opens dispatch assignment picker
+- **Dispatch assignment modes**: `manual`, `closest_idle_or_repositioning` (auto-assign, includes repositioning cars), `closest_idle` (auto-assign idle only)
+- **Advanced automation gate**: reposition rules, global constraints, zone minimums, and full rule builder locked until `advanced_automation_enabled`
+- **Routing rule engine** (`fleet_routing/`): unified dispatch + reposition via prioritized IF/THEN rules; full playbook available after advanced unlock
 - **Forecast**: per-zone hourly curves (`demand/forecast.py`) and special events feed rule conditions
 - **Supply caps**: global + per-zone `max_idle_by_zone` used by zone surplus conditions
 - **Zone minimums**: `target_supply_by_zone` per-zone idle floor; map shows full-city zone overlays (`zone_overlays`)
@@ -59,7 +82,7 @@ New package, command, snapshot field, or panel → update AGENTS.md and README.m
 - **Human override**: click/drag staging, `manual_hold_until_h`, ops audit log
 - **Depot release**: depot/charger facilities, health gates, `send_to_depot` routing action
 
-Snapshot includes `routing_rules`, `routing_rule_hits`, vehicle health KPIs, forecast, zone balance, `zone_overlays`, facilities, events, and dispatch log fields.
+Snapshot includes `operator_setup`, `dispatch_candidates`, `routing_rules`, `routing_rule_hits`, vehicle health KPIs, forecast, zone balance, `zone_overlays`, facilities, events, and dispatch log fields.
 
 See [docs/FUTURE_NODE_OPERATIONS.md](docs/FUTURE_NODE_OPERATIONS.md) for maintenance/cleaning queue details.
 
@@ -73,7 +96,9 @@ Tabbed sidebar (`w-96`, default **Assets**):
 | **Routing** | `RoutingPanel.tsx` + `RuleEditor.tsx` | Operator rule builder (dispatch + reposition playbook) |
 | **Auto** | `AutomationPanel.tsx` | Master dispatch switch + global deadhead/zone constraints |
 | **Demand** | `DemandPanel.tsx` | Pricing, zone minimums, caps, wear thresholds, forecast/events |
-| **Activity** | `TripQueuePanel` + `OpsLogPanel` | Pending trips and dispatch audit log |
+| **Activity** | `TripQueuePanel` + `OpsLogPanel` | Pending trips (manual assign + ranked suggestions) and dispatch audit log |
+
+On load or reset, the **Auto** tab shows dispatch assignment options (manual default). Switch to closest idle/repositioning anytime without a blocking modal.
 
 Routing rules evaluate top-to-bottom; first matching enabled rule wins. Phases: `dispatch` (trip assignment) and `reposition` (idle vehicle moves).
 
