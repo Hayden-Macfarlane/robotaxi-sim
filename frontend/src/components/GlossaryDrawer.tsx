@@ -2,11 +2,10 @@ import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CATEGORY_LABELS, FLEET_TERMS, searchTerms, type TermCategory } from '../lib/fleetTerminology'
 import { useUiMode } from '../contexts/UiModeContext'
-import { POLICY_SUBTAB_LABELS } from '../lib/fleetTerminology'
 
 /** Searchable fleet terminology glossary drawer. */
 export function GlossaryDrawer() {
-  const { glossaryOpen, setGlossaryOpen, navigate, uiMode } = useUiMode()
+  const { glossaryOpen, setGlossaryOpen, navigate } = useUiMode()
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<TermCategory | 'all'>('all')
 
@@ -59,22 +58,40 @@ export function GlossaryDrawer() {
                 <span className="text-[10px] text-text-secondary shrink-0">{CATEGORY_LABELS[term.category]}</span>
               </div>
               <p className="text-text-secondary mt-2 leading-relaxed">{term.description}</p>
-              {term.policySubTab && (
+              {term.policySubTab === 'rules' && (
                 <button
                   type="button"
-                  onClick={() => navigate({ tab: 'policy', policySubTab: term.policySubTab })}
+                  onClick={() => navigate({ tab: 'rules', rulesSubTab: 'library', libraryView: 'constraints' })}
                   className="text-accent hover:underline mt-2 text-[10px]"
                 >
-                  Open {uiMode === 'standard' ? POLICY_SUBTAB_LABELS[term.policySubTab].plain : POLICY_SUBTAB_LABELS[term.policySubTab].industry}
+                  Open Rules → Library
+                </button>
+              )}
+              {term.policySubTab === 'market' && (
+                <button
+                  type="button"
+                  onClick={() => navigate({ settingsOpen: true, settingsSection: 'market' })}
+                  className="text-accent hover:underline mt-2 text-[10px]"
+                >
+                  Open Settings → Market
+                </button>
+              )}
+              {term.policySubTab === 'operations' && (
+                <button
+                  type="button"
+                  onClick={() => navigate({ settingsOpen: true, settingsSection: 'operations' })}
+                  className="text-accent hover:underline mt-2 text-[10px]"
+                >
+                  Open Settings → Operations
                 </button>
               )}
               {!term.policySubTab && term.id.startsWith('score_weight') && (
                 <button
                   type="button"
-                  onClick={() => navigate({ tab: 'analyze' })}
+                  onClick={() => navigate({ settingsOpen: true, settingsSection: 'analyze' })}
                   className="text-accent hover:underline mt-2 text-[10px]"
                 >
-                  Open Analyze → Composite score weights
+                  Open Settings → Performance
                 </button>
               )}
             </div>

@@ -38,17 +38,15 @@ def mgr() -> SimulationManager:
     return manager
 
 
-def test_reset_auto_dispatches_on_start(mgr: SimulationManager) -> None:
-    """Reset defaults to closest-idle-or-repositioning and assigns waiting riders."""
-    assert mgr.state.policy.auto_dispatch_enabled
-    assert mgr.state.routing_rules.routing_enabled
-    assert mgr.state.operator_setup.dispatch_assignment_mode == (
-        DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING
-    )
-    pending = [t for t in mgr.state.trips.values() if t.status == TripStatus.PENDING]
-    assigned = [t for t in mgr.state.trips.values() if t.status == TripStatus.MATCHED]
-    assert len(pending) + len(assigned) == 2
-    assert len(assigned) >= 1
+def test_reset_starts_with_blank_playbook(mgr: SimulationManager) -> None:
+    """Reset starts with no rules, no auto-dispatch, and no seeded trips."""
+    assert not mgr.state.policy.auto_dispatch_enabled
+    assert not mgr.state.routing_rules.routing_enabled
+    assert mgr.state.operator_setup.dispatch_assignment_mode == DispatchAssignmentMode.MANUAL
+    assert mgr.state.playbook_v2.rules == []
+    assert mgr.state.playbook_v2.constants == {}
+    assert mgr.state.playbook_v2.enabled
+    assert len(mgr.state.trips) == 0
 
 
 def test_setup_enables_closest_idle_or_repositioning(mgr: SimulationManager) -> None:

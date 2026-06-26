@@ -4,9 +4,8 @@ import { UiModeProvider, useUiMode } from './contexts/UiModeContext'
 import { CityMap } from './components/CityMap'
 import { KpiStrip } from './components/KpiStrip'
 import { LivePanel } from './components/LivePanel'
-import { DispatchPanel } from './components/DispatchPanel'
-import { PolicyPanel } from './components/PolicyPanel'
-import { AnalyticsPanel } from './components/AnalyticsPanel'
+import { RulesHubPanel } from './components/rules/RulesHubPanel'
+import { SimSettingsDrawer } from './components/rules/SimSettingsDrawer'
 import { GlossaryDrawer } from './components/GlossaryDrawer'
 import { ReleaseZonePicker } from './components/ReleaseZonePicker'
 import { SidebarTabs } from './components/ui/SidebarTabs'
@@ -46,6 +45,7 @@ function AppShell() {
     setup_complete: true,
     dispatch_assignment_mode: 'closest_idle_or_repositioning',
     advanced_automation_enabled: false,
+    routing_engine_version: 'v2',
   }
 
   return (
@@ -144,6 +144,20 @@ function AppShell() {
         <aside className="w-96 border-l border-border-default bg-surface-base flex flex-col overflow-hidden">
           <SidebarTabs active={activeTab} onChange={setActiveTab} />
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            {activeTab === 'rules' && (
+              <RulesHubPanel
+                playbook={snapshot.playbook_v2 ?? { enabled: true, constants: {}, rules: [] }}
+                ruleHits={snapshot.rule_hits_v2 ?? []}
+                metricCatalog={snapshot.metric_catalog ?? []}
+                constantCatalog={snapshot.constant_catalog ?? []}
+                actionCatalog={snapshot.action_catalog ?? []}
+                selectionCatalog={snapshot.selection_catalog ?? []}
+                ruleTemplates={snapshot.rule_templates ?? []}
+                routingEngineVersion={operatorSetup.routing_engine_version ?? 'v2'}
+                onCommand={sendCommand}
+                onHighlightVehicle={setHighlightVehicleId}
+              />
+            )}
             {activeTab === 'live' && (
               <LivePanel
                 vehicles={snapshot.vehicles}
@@ -153,6 +167,7 @@ function AppShell() {
                 dispatchCandidates={snapshot.dispatch_candidates ?? {}}
                 dispatchMode={operatorSetup.dispatch_assignment_mode}
                 dispatchActions={snapshot.recent_dispatch_actions ?? []}
+                ruleHitsV2={snapshot.rule_hits_v2 ?? []}
                 simStartIso={snapshot.sim_start_iso}
                 stagingVehicleId={stagingVehicleId}
                 selectedVehicleIds={selectedVehicleIds}
@@ -165,36 +180,22 @@ function AppShell() {
                 onCommand={sendCommand}
               />
             )}
-            {activeTab === 'dispatch' && (
-              <DispatchPanel operatorSetup={operatorSetup} onCommand={sendCommand} />
-            )}
-            {activeTab === 'policy' && (
-              <PolicyPanel
-                policy={snapshot.policy}
-                ruleSet={snapshot.routing_rules ?? { routing_enabled: false, rules: [] }}
-                ruleHits={snapshot.routing_rule_hits ?? []}
-                operatorSetup={operatorSetup}
-                forecast={snapshot.forecast_by_zone ?? []}
-                events={snapshot.special_events ?? []}
-                zoneBalance={snapshot.zone_balance ?? []}
-                currentTimeH={snapshot.current_time_h}
-                onCommand={sendCommand}
-              />
-            )}
-            {activeTab === 'analyze' && (
-              <AnalyticsPanel
-                kpis={snapshot.kpis}
-                kpiSeries={snapshot.kpi_series ?? []}
-                experimentRuns={snapshot.experiment_runs ?? []}
-                operatorPresets={snapshot.operator_presets ?? []}
-                policy={snapshot.policy}
-                seed={snapshot.seed ?? 42}
-                onCommand={sendCommand}
-              />
-            )}
           </div>
         </aside>
       </div>
+      <SimSettingsDrawer
+        policy={snapshot.policy}
+        operatorSetup={operatorSetup}
+        forecast={snapshot.forecast_by_zone ?? []}
+        events={snapshot.special_events ?? []}
+        currentTimeH={snapshot.current_time_h}
+        kpis={snapshot.kpis}
+        kpiSeries={snapshot.kpi_series ?? []}
+        experimentRuns={snapshot.experiment_runs ?? []}
+        operatorPresets={snapshot.operator_presets ?? []}
+        seed={snapshot.seed ?? 42}
+        onCommand={sendCommand}
+      />
       <GlossaryDrawer />
       {releaseVehicleId && (
         <ReleaseZonePicker

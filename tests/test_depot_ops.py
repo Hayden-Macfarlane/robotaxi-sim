@@ -87,7 +87,7 @@ def test_send_to_facility_all_kinds(sim_manager: SimulationManager) -> None:
         vehicle.facility_id = None
         err = sim_manager.send_to_facility(vehicle.id, fac.id, manual=True)
         assert err is None, f"failed for {fac.kind}: {err}"
-        assert vehicle.state == VehicleState.REPOSITIONING
+        assert vehicle.state == VehicleState.TO_FACILITY
         sim_manager._clear_leg(vehicle)
         sim_manager._engine.cancel_events_for_entity(vehicle.id, event_type=EventType.VEHICLE_ARRIVE)
         vehicle.state = VehicleState.IDLE

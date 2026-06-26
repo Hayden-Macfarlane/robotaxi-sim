@@ -8,10 +8,8 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
+  { id: 'rules', industry: 'Rules', plain: 'Fleet rules' },
   { id: 'live', industry: 'Live', plain: 'Live ops' },
-  { id: 'dispatch', industry: 'Dispatch', plain: 'Dispatch' },
-  { id: 'policy', industry: 'Policy', plain: 'Fleet policy' },
-  { id: 'analyze', industry: 'Analyze', plain: 'Performance' },
 ]
 
 interface Props {
@@ -19,12 +17,12 @@ interface Props {
   onChange: (tab: SidebarTabId) => void
 }
 
-/** Tab bar for the four operator jobs in the command sidebar. */
+/** Primary sidebar tabs: Rules engine + Live ops, with Sim settings gear. */
 export function SidebarTabs({ active, onChange }: Props) {
-  const { uiMode } = useUiMode()
+  const { uiMode, setSettingsOpen } = useUiMode()
 
   return (
-    <div className="flex border-b border-border-default bg-surface-header flex-shrink-0">
+    <div className="flex border-b border-border-default bg-surface-header flex-shrink-0 items-stretch">
       {TABS.map(tab => {
         const label = uiMode === 'standard' ? tab.plain : tab.industry
         return (
@@ -42,6 +40,15 @@ export function SidebarTabs({ active, onChange }: Props) {
           </button>
         )
       })}
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        className="px-3 py-2.5 text-xs text-text-secondary hover:text-text-primary border-l border-border-default hover:bg-surface-raised/30"
+        title="Sim settings"
+        aria-label="Sim settings"
+      >
+        ⚙
+      </button>
     </div>
   )
 }

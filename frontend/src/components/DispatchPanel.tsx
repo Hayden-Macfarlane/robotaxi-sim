@@ -77,14 +77,9 @@ export function DispatchPanel({ operatorSetup, onCommand }: Props) {
       <PanelSection title="Related policy" impact="Configure how auto-dispatch ranks and assigns vehicles.">
         <div className="p-3 space-y-2 text-xs">
           <p className="text-text-secondary">
-            Matching weights, supply floors, and automation rules live under Fleet policy.
+            Matching weights, supply floors, and automation rules live in the Rules playbook.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <PolicyLink subTab="matching" />
-            <PolicyLink subTab="supply" />
-            <PolicyLink subTab="automation" />
-            <PolicyLink subTab="network" />
-          </div>
+          <PolicyLink subTab="rules" />
         </div>
       </PanelSection>
     </div>

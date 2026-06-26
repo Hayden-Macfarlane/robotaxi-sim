@@ -5,6 +5,7 @@ export type VehicleState =
   | 'to_pickup'
   | 'with_rider'
   | 'repositioning'
+  | 'to_facility'
   | 'at_depot'
   | 'charging'
   | 'maintenance'
@@ -148,6 +149,7 @@ export interface OperatorAlertSnap {
 export interface ZoneBalanceSnap {
   zone: string
   supply: number
+  coverage_supply?: number
   pending_demand: number
   expected_demand: number
   target_supply: number
@@ -261,6 +263,7 @@ export interface OperatorSetupSnap {
   setup_complete: boolean
   dispatch_assignment_mode: DispatchAssignmentMode | null
   advanced_automation_enabled: boolean
+  routing_engine_version?: string
 }
 
 export interface SimulationSnapshot {
@@ -287,6 +290,13 @@ export interface SimulationSnapshot {
   recent_dispatch_actions?: DispatchActionSnap[]
   routing_rules?: import('./routing').RoutingRuleSet
   routing_rule_hits?: import('./routing').RoutingRuleHit[]
+  playbook_v2?: import('./playbook').PlaybookV2
+  rule_hits_v2?: import('./playbook').RuleHitV2[]
+  metric_catalog?: import('./playbook').MetricMeta[]
+  constant_catalog?: import('./playbook').ConstantMeta[]
+  action_catalog?: import('./playbook').ActionMeta[]
+  selection_catalog?: import('./playbook').SelectionMeta[]
+  rule_templates?: import('./playbook').RuleTemplate[]
   operator_setup?: OperatorSetupSnap
   operator_alerts?: OperatorAlertSnap[]
   dispatch_candidates?: Record<string, DispatchCandidateSnap[]>
@@ -309,6 +319,9 @@ export type SimCommand =
   | { type: 'RESET_SIMULATION' }
   | { type: 'SET_NETWORK_POLICY'; [key: string]: unknown }
   | { type: 'SET_ROUTING_RULES'; rules: import('./routing').RoutingRule[]; routing_enabled?: boolean }
+  | { type: 'SET_PLAYBOOK_V2'; rules: import('./playbook').RuleV2[]; constants?: Record<string, number>; enabled?: boolean }
+  | { type: 'SET_ROUTING_ENGINE_VERSION'; version: 'v1' | 'v2' | 'shadow' }
+  | { type: 'RESET_PLAYBOOK_V2' }
   | { type: 'RESET_ROUTING_RULES' }
   | { type: 'SET_OPERATOR_SETUP'; dispatch_assignment_mode?: DispatchAssignmentMode; advanced_automation_enabled?: boolean }
   | { type: 'DISPATCH_VEHICLE'; vehicle_id: string; trip_id: string }

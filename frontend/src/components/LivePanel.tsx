@@ -14,6 +14,7 @@ interface Props {
   dispatchCandidates: Record<string, import('../types/simulation').DispatchCandidateSnap[]>
   dispatchMode: DispatchAssignmentMode | null
   dispatchActions: DispatchActionSnap[]
+  ruleHitsV2?: import('../types/playbook').RuleHitV2[]
   simStartIso: string
   stagingVehicleId: string | null
   selectedVehicleIds: string[]
@@ -62,6 +63,7 @@ export function LivePanel(props: Props) {
               trips={props.trips}
               dispatchCandidates={props.dispatchCandidates}
               dispatchMode={props.dispatchMode}
+              ruleHitsV2={props.ruleHitsV2}
               onCommand={props.onCommand}
             />
             <OpsLogPanel actions={props.dispatchActions} simStartIso={props.simStartIso} />

@@ -84,7 +84,7 @@ export function MarketDemandPanel({ policy, forecast, events, currentTimeH, onCo
 
       <PanelSection title="Supply by zone" impact="Zone floors and caps are configured separately.">
         <p className="p-3 text-xs text-text-secondary">
-          Minimum idle cars and zone caps: <PolicyLink subTab="supply" />
+          Minimum idle cars and zone caps: <PolicyLink subTab="rules" />
         </p>
       </PanelSection>
 

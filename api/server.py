@@ -79,6 +79,22 @@ def _init_manager() -> SimulationManager:
     return mgr
 
 
+def _static_rule_catalogs() -> dict[str, object]:
+    """Rule engine catalogs available before SimulationManager finishes loading."""
+    from fleet_routing.v2.catalog import all_action_meta, all_selection_meta
+    from fleet_routing.v2.constants import all_constant_meta
+    from fleet_routing.v2.metrics import REGISTRY
+    from fleet_routing.v2.templates import all_rule_templates
+
+    return {
+        "metric_catalog": [m.model_dump() for m in REGISTRY.all_meta()],
+        "constant_catalog": [c.model_dump() for c in all_constant_meta()],
+        "action_catalog": [a.model_dump() for a in all_action_meta()],
+        "selection_catalog": [s.model_dump() for s in all_selection_meta()],
+        "rule_templates": [t.model_dump() for t in all_rule_templates()],
+    }
+
+
 def _initializing_snapshot() -> dict[str, object]:
     """Minimal snapshot while the city graph loads in the background."""
     return {
@@ -114,9 +130,17 @@ def _initializing_snapshot() -> dict[str, object]:
         "demand_by_zone": {},
         "operator_setup": {
             "setup_complete": True,
-            "dispatch_assignment_mode": "closest_idle_or_repositioning",
+            "dispatch_assignment_mode": "manual",
             "advanced_automation_enabled": False,
+            "routing_engine_version": "v2",
         },
+        "playbook_v2": {
+            "enabled": True,
+            "constants": {},
+            "rules": [],
+        },
+        "rule_hits_v2": [],
+        **_static_rule_catalogs(),
         "dispatch_candidates": {},
         "vehicles": [],
         "trips": [],
@@ -320,6 +344,40 @@ def _handle_command(raw: str) -> dict[str, str] | None:
             _manager.set_routing_rules_from_dict(current)
         except Exception as exc:
             return _system_alert(f"Invalid routing rules: {exc}")
+
+    elif cmd_type == "SET_PLAYBOOK_V2":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        current = _manager.state.playbook_v2.model_dump()
+        rules_raw = cmd.get("rules")
+        if isinstance(rules_raw, list):
+            current["rules"] = rules_raw
+        constants_raw = cmd.get("constants")
+        if isinstance(constants_raw, dict):
+            current["constants"] = constants_raw
+        enabled = cmd.get("enabled")
+        if isinstance(enabled, bool):
+            current["enabled"] = enabled
+        try:
+            _manager.set_playbook_v2_from_dict(current)
+        except Exception as exc:
+            return _system_alert(f"Invalid playbook: {exc}")
+
+    elif cmd_type == "SET_ROUTING_ENGINE_VERSION":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        version = str(cmd.get("version", "v2"))
+        if version not in ("v1", "v2", "shadow"):
+            return _system_alert("version must be v1, v2, or shadow.")
+        setup = _manager.state.operator_setup.model_copy(update={"routing_engine_version": version})
+        _manager.state.operator_setup = setup
+
+    elif cmd_type == "RESET_PLAYBOOK_V2":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        from fleet_routing.v2.defaults import default_playbook_v2
+
+        _manager.set_playbook_v2(default_playbook_v2())
 
     elif cmd_type == "RESET_ROUTING_RULES":
         if _manager is None:
@@ -528,6 +586,12 @@ async def simulation_loop_task() -> None:
 async def health() -> dict[str, bool | str]:
     """Liveness probe; ``ready`` when the simulation world has finished loading."""
     return {"ok": True, "ready": _manager is not None}
+
+
+@app.get("/catalogs")
+async def rule_catalogs() -> dict[str, object]:
+    """Static rule-engine catalogs available before the simulation finishes loading."""
+    return _static_rule_catalogs()
 
 
 async def _init_manager_background() -> None:

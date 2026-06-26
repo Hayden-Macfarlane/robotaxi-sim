@@ -11,6 +11,7 @@ export const STATUS_COPY: Record<VehicleState, StatusCopy> = {
   to_pickup: { industry: 'En route to pickup', plain: 'Heading to rider' },
   with_rider: { industry: 'On trip', plain: 'Carrying a rider' },
   repositioning: { industry: 'Rebalancing', plain: 'Empty, moving to better location' },
+  to_facility: { industry: 'En route to facility', plain: 'Heading to facility' },
   at_depot: { industry: 'At depot', plain: 'Parked off-street' },
   charging: { industry: 'Charging', plain: 'Charging battery' },
   maintenance: { industry: 'In service', plain: 'In maintenance' },

@@ -16,7 +16,7 @@ Single-city robotaxi fleet manager: spawn trip demand, auto-dispatch idle vehicl
 | Demand | `demand/` | Trip spawn + forecast curves |
 | Dispatch | `dispatch/` | Vehicle–trip matching + batch assignment |
 | Experiment | `experiment/` | Run ledger persistence |
-| Fleet routing | `fleet_routing/` | Operator rule engine (dispatch + reposition) |
+| Fleet routing | `fleet_routing/` | v1 rule engine + **v2 playbook** (`fleet_routing/v2/`) |
 | Fleet health | `fleet/` | Wear, eligibility, service duration |
 | Orchestration | `simulation_loop/manager.py` | Events, KPIs, snapshots |
 | API | `api/server.py` | WS + command routing |
@@ -29,8 +29,11 @@ Single-city robotaxi fleet manager: spawn trip demand, auto-dispatch idle vehicl
 - `RESET_SIMULATION` — rebuild world (manual dispatch by default; change mode in Dispatch tab)
 - `SET_OPERATOR_SETUP` — `{ dispatch_assignment_mode?, advanced_automation_enabled? }` switch dispatch policy anytime
 - `SET_NETWORK_POLICY` — surge, fleet_size, caps, ROI gates, depot release, battery, etc.
-- `SET_ROUTING_RULES` — `{ rules[], routing_enabled? }` operator routing playbook
-- `RESET_ROUTING_RULES` — restore default routing playbook
+- `SET_ROUTING_RULES` — `{ rules[], routing_enabled? }` legacy v1 playbook
+- `SET_PLAYBOOK_V2` — `{ rules[], constants?, enabled? }` composable rule studio (primary)
+- `SET_ROUTING_ENGINE_VERSION` — `{ version: "v1"|"v2"|"shadow" }` engine selector
+- `RESET_PLAYBOOK_V2` — restore default v2 playbook from `fleet_routing/v2/defaults.py`
+- `RESET_ROUTING_RULES` — restore default routing playbook (v1 + v2 parity preset)
 - `DISPATCH_VEHICLE` — manual `{ vehicle_id, trip_id }`
 - `REPOSITION_VEHICLE` — `{ vehicle_id, node_id }` or `{ vehicle_id, lat, lon }` (sets manual hold)
 - `STAGE_VEHICLES` — `{ vehicle_ids[], lat, lon }` bulk staging
@@ -88,12 +91,13 @@ New package, command, snapshot field, or panel → update AGENTS.md and README.m
 - **Forecast**: per-zone hourly curves (`demand/forecast.py`) and special events feed rule conditions
 - **Supply caps**: global + per-zone `max_idle_by_zone` used by zone surplus conditions
 - **Zone minimums**: `target_supply_by_zone` per-zone idle floor; map shows full-city zone overlays (`zone_overlays`)
-- **Deadhead ROI**: global constraints (`min_reposition_benefit`, `max_reposition_min`) applied after rules match
+- **Rule engine v2** (`fleet_routing/v2/`): MetricRegistry (~80+ variables), composable IF/AND/OR expressions, parameterized actions, selection modes (most_crowded, one_per_cluster), Rule Studio UI. Default engine is **v2**; playbook replaces scattered automation toggles.
+- **NetworkPolicy automation fields deprecated** — `auto_dispatch_enabled`, deadzone filler, scoring weights move into playbook constants/rules when using v2.
 - **Human override**: click vehicle on map or sidebar **Stage**, then click/drag map to reposition; `manual_hold_until_h`, ops audit log
 - **Facility ops**: off-street vehicles visible on map at facility coords; **Send here** / **Return to street** (zone picker sorted by `zone_balance.gap`); release cancels pending service timers and routes via reposition leg
 - **Depot release**: depot/charger facilities, health gates, `send_to_depot` routing action
 
-Snapshot includes `operator_setup`, `dispatch_candidates`, `routing_rules`, `routing_rule_hits`, vehicle health KPIs, forecast, zone balance, `zone_overlays`, facilities, events, dispatch log, **`seed`**, **`kpi_series`**, **`experiment_runs`**, and **`operator_presets`**.
+Snapshot includes `operator_setup`, `dispatch_candidates`, `routing_rules`, `routing_rule_hits`, vehicle health KPIs, forecast, zone balance, `zone_overlays`, facilities, events, dispatch log, **`seed`**, **`kpi_series`**, **`experiment_runs`**, **`operator_presets`**, **`playbook_v2`**, **`rule_hits_v2`**, **`metric_catalog`**, **`constant_catalog`**, **`action_catalog`**, **`selection_catalog`**, and **`rule_templates`**.
 
 ## Optimization lab
 
@@ -112,14 +116,24 @@ See [docs/FUTURE_NODE_OPERATIONS.md](docs/FUTURE_NODE_OPERATIONS.md) for mainten
 
 ## UI (control tower)
 
-Four operator jobs in the sidebar (`w-96`, default **Live**). Header: **Standard / Expert** mode toggle and **Fleet glossary** drawer.
+Rules-first sidebar (`w-96`, default **Fleet rules**). Header: **Standard / Expert** mode toggle and **Fleet glossary** drawer.
 
 | Tab | Component | Purpose |
 |-----|-----------|---------|
-| **Live** | `LivePanel.tsx` | Sub-tabs: **Fleet** (AssetsPanel) and **Orders** (TripQueuePanel + OpsLogPanel) |
-| **Dispatch** | `DispatchPanel.tsx` | Assignment mode (manual / nearest available / idle only) + links to policy |
-| **Policy** | `PolicyPanel.tsx` | Sub-tabs: Matching weights, Supply by zone, Automation playbook, Network constraints, Market & demand, Operations |
-| **Analyze** | `AnalyticsPanel.tsx` | Economics KPIs, composite score weights, sparklines, experiments, presets |
+| **Fleet rules** | `RulesHubPanel.tsx` | Sub-tabs: **Build** (playbook editor), **Monitor** (rule-hit feed), **Library** (browse constraints, thresholds, templates, actions) |
+| **Live ops** | `LivePanel.tsx` | Sub-tabs: **Fleet** (AssetsPanel) and **Orders** (TripQueuePanel + OpsLogPanel) |
+
+**Sim settings** (gear icon): slide-over drawer with Dispatch, Market, Operations, Performance (`SimSettingsDrawer.tsx`).
+
+### Rules hub
+
+| Sub-tab | Component | Purpose |
+|---------|-----------|---------|
+| **Build** | `RulesBuildPanel.tsx` | Thresholds, rule list, ConditionBuilder, ActionPicker, SelectionPicker |
+| **Monitor** | `RulesMonitorPanel.tsx` | Unified `rule_hits_v2` feed with drill-down to Live |
+| **Library** | `RulesLibraryPanel.tsx` | Searchable catalogs: constraints (metrics), thresholds (constants), templates, actions |
+
+Discoverability: backend ships `constant_catalog`, `action_catalog`, `selection_catalog`, `rule_templates` alongside `metric_catalog`. Operators pick from labeled lists — no need to memorize IDs.
 
 ### Terminology
 
@@ -128,19 +142,15 @@ Four operator jobs in the sidebar (`w-96`, default **Live**). Header: **Standard
 - **Standard** mode: plain-first labels; hides advanced scoring formula and expert-only weights
 - **Expert** mode: industry labels (rebalancing, supply floor, match score, fulfillment rate)
 
-### Policy sub-tabs
+### Sim settings sections
 
-| Sub-tab | Controls |
-|---------|----------|
-| **Matching weights** | Dispatch scoring weights, dropoff rebalancing, cross-zone penalty, deadhead cap |
-| **Supply by zone** | Per-zone supply floor, idle cap, rebalancing patience, auto-dispatch toggle, demand weights |
-| **Automation playbook** | IF/THEN routing rules (dispatch + reposition phases) |
-| **Network constraints** | Master switches, rebalancing ROI, deadzone filler, depot, charge-aware, auto-dispatch tripwires, traffic multiplier |
-| **Market & demand** | Pricing, fleet size, trip spawn rate, wear thresholds, forecast/events |
-| **Operations** | Scenarios, trip SLA, fleet health, operator alert thresholds |
+| Section | Component | Controls |
+|---------|-----------|----------|
+| **Dispatch** | `DispatchPanel.tsx` | Assignment mode (manual / nearest available / idle only) |
+| **Market** | `MarketDemandPanel.tsx` | Pricing, fleet size, trip spawn rate, wear thresholds, forecast/events |
+| **Operations** | `OperationsPanel.tsx` | Scenarios, trip SLA, fleet health, operator alert thresholds |
+| **Performance** | `AnalyticsPanel.tsx` | Economics KPIs, composite score weights, sparklines, experiments, presets |
 
-Each `NetworkPolicy` field has **one primary panel**; removed duplicates link via `PolicyLink`.
+On load or reset, use **Sim settings → Dispatch** for assignment mode (manual default).
 
-On load or reset, use **Dispatch** tab for assignment mode (manual default).
-
-Shared primitives: `FieldLabel`, `HelpPopover`, `PolicyLink`, `ToggleCard`, `PanelSection` (with `impact` line), `SidebarTabs` under `frontend/src/components/ui/`; helpers in `fleetTerminology.ts`, `fleetStats.ts`, `vehicleLabels.ts`.
+Shared primitives: `SearchableSelect`, `CatalogCard`, `FilterChips`, `FieldLabel`, `HelpPopover`, `PolicyLink`, `ToggleCard`, `PanelSection` under `frontend/src/components/ui/`; rules components under `frontend/src/components/rules/`.

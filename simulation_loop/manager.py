@@ -47,6 +47,10 @@ from fleet_routing.defaults import (
 )
 from fleet_routing.engine import RuleEvaluator
 from fleet_routing.models import ActionType, RoutingRuleHit, RoutingRuleSet, RulePhase
+from fleet_routing.v2.defaults import default_playbook_v2, manual_playbook_v2
+from fleet_routing.v2.engine import RuleEngineV2
+from fleet_routing.v2.models import PlaybookV2
+from simulation_loop.routing_v2 import build_manager_eval_context, record_hits_v2
 from fleet.health import (
     SERVICE_STATES,
     apply_movement_wear,
@@ -68,7 +72,7 @@ from simulation_loop.state import SimulationState
 from simulation_loop.world_builder import build_world
 
 DEMAND_TICK_HOURS = 0.25
-INITIAL_PENDING_TRIPS = 2
+INITIAL_PENDING_TRIPS = 0
 MINUTES_PER_HOUR = 60.0
 MAX_STREET_LINES_IN_SNAPSHOT = 4000
 MAX_DISPATCH_LOG = 50
@@ -144,9 +148,9 @@ class SimulationManager:
         self._apply_routing_rules()
 
     def _apply_startup_defaults(self) -> None:
-        """Reset policy to auto-dispatch closest idle/repositioning vehicles on startup."""
+        """Start blank: no auto-dispatch, empty playbook; operator adds rules first."""
         self.set_operator_setup(
-            dispatch_assignment_mode=DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
+            dispatch_assignment_mode=DispatchAssignmentMode.MANUAL,
             advanced_automation_enabled=False,
         )
         self._sync_demand_from_policy()
@@ -174,23 +178,28 @@ class SimulationManager:
                     update={"auto_dispatch_enabled": False},
                 )
                 self._state.routing_rules = manual_first_routing_rules()
+                self._state.playbook_v2 = manual_playbook_v2()
             elif dispatch_assignment_mode == DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING:
                 self._state.policy = self._state.policy.model_copy(
                     update={"auto_dispatch_enabled": True},
                 )
                 self._state.routing_rules = dispatch_only_rules(dispatch_assignment_mode)
+                self._state.playbook_v2 = default_playbook_v2()
             elif dispatch_assignment_mode == DispatchAssignmentMode.CLOSEST_IDLE:
                 self._state.policy = self._state.policy.model_copy(
                     update={"auto_dispatch_enabled": True},
                 )
                 self._state.routing_rules = dispatch_only_rules(dispatch_assignment_mode)
+                self._state.playbook_v2 = default_playbook_v2()
         if advanced_automation_enabled is not None:
             setup.advanced_automation_enabled = advanced_automation_enabled
             if advanced_automation_enabled and setup.dispatch_assignment_mode is not None:
                 if setup.dispatch_assignment_mode == DispatchAssignmentMode.MANUAL:
                     self._state.routing_rules = manual_first_routing_rules()
+                    self._state.playbook_v2 = manual_playbook_v2()
                 else:
                     self._state.routing_rules = default_routing_rules()
+                    self._state.playbook_v2 = default_playbook_v2()
                     mode = setup.dispatch_assignment_mode
                     if mode in (
                         DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
@@ -251,6 +260,14 @@ class SimulationManager:
     def set_routing_rules_from_dict(self, payload: dict[str, object]) -> None:
         """Validate and apply routing rules from a JSON payload."""
         self._state.routing_rules = RoutingRuleSet.model_validate(payload)
+
+    def set_playbook_v2(self, playbook: PlaybookV2) -> None:
+        """Replace the v2 operator playbook."""
+        self._state.playbook_v2 = playbook
+
+    def set_playbook_v2_from_dict(self, payload: dict[str, object]) -> None:
+        """Validate and apply v2 playbook from JSON."""
+        self._state.playbook_v2 = PlaybookV2.model_validate(payload)
 
     def set_network_policy(self, **kwargs: object) -> None:
         """Update manager policy fields from keyword args."""
@@ -541,10 +558,12 @@ class SimulationManager:
             events=events,
         )
         dispatch_candidates = self._dispatch_candidates_snapshot()
+        coverage = self._coverage_supply_by_zone()
         zone_balance_rows = [
             {
                 "zone": row.zone,
                 "supply": row.supply,
+                "coverage_supply": coverage.get(row.zone, 0),
                 "pending_demand": row.pending_demand,
                 "expected_demand": row.expected_demand,
                 "target_supply": row.target_supply,
@@ -585,6 +604,35 @@ class SimulationManager:
             "routing_rules": self._state.routing_rules.model_dump(),
             "routing_rule_hits": [
                 h.model_dump() for h in self._state.routing_rule_hits[-MAX_ROUTING_RULE_HITS:]
+            ],
+            "playbook_v2": self._state.playbook_v2.model_dump(),
+            "rule_hits_v2": [
+                h.model_dump() for h in self._state.rule_hits_v2[-MAX_ROUTING_RULE_HITS:]
+            ],
+            "metric_catalog": [
+                m.model_dump() for m in __import__(
+                    "fleet_routing.v2.metrics", fromlist=["REGISTRY"]
+                ).REGISTRY.all_meta()
+            ],
+            "constant_catalog": [
+                c.model_dump() for c in __import__(
+                    "fleet_routing.v2.constants", fromlist=["all_constant_meta"]
+                ).all_constant_meta()
+            ],
+            "action_catalog": [
+                a.model_dump() for a in __import__(
+                    "fleet_routing.v2.catalog", fromlist=["all_action_meta"]
+                ).all_action_meta()
+            ],
+            "selection_catalog": [
+                s.model_dump() for s in __import__(
+                    "fleet_routing.v2.catalog", fromlist=["all_selection_meta"]
+                ).all_selection_meta()
+            ],
+            "rule_templates": [
+                t.model_dump() for t in __import__(
+                    "fleet_routing.v2.templates", fromlist=["all_rule_templates"]
+                ).all_rule_templates()
             ],
             "operator_setup": self._state.operator_setup.model_dump(),
             "dispatch_candidates": dispatch_candidates,
@@ -872,6 +920,78 @@ class SimulationManager:
         )
 
     def _apply_routing_rules(self) -> None:
+        """Run dispatch and reposition rules (v1, v2, or shadow)."""
+        version = self._state.operator_setup.routing_engine_version
+        if version == "shadow":
+            self._apply_routing_rules_v2(shadow_only=True)
+            self._apply_routing_rules_v1()
+            return
+        if version == "v2":
+            self._apply_routing_rules_v2()
+            return
+        self._apply_routing_rules_v1()
+
+    def _apply_routing_rules_v2(self, *, shadow_only: bool = False) -> None:
+        """Execute rule engine v2 playbook."""
+        if not self._state.playbook_v2.enabled and not shadow_only:
+            return
+        pol = self._state.policy
+        supply, pending = self._zone_heatmaps()
+        kpis = self._compute_kpis()
+        ctx = build_manager_eval_context(
+            self._state,
+            router=self._router,
+            demand=self._demand,
+            sim_time_h=self._engine.current_time,
+            supply_by_zone=supply,
+            pending_by_zone=pending,
+            kpis=kpis,
+            horizon_h=pol.reposition_lead_min / MINUTES_PER_HOUR,
+            rng=self._rng,
+        )
+        engine = RuleEngineV2(self._state.playbook_v2)
+        plan = engine.plan(ctx, timestamp_h=self._engine.current_time, shadow_only=shadow_only)
+        record_hits_v2(self._state, plan.hits)
+        if shadow_only:
+            return
+        for decision in plan.dispatch:
+            vehicle = self._state.vehicles.get(decision.vehicle_id)
+            trip = self._state.trips.get(decision.trip_id)
+            if vehicle is None or trip is None:
+                continue
+            self._assign_trip(vehicle, trip)
+            self._record_rule_hit(
+                RoutingRuleHit(
+                    timestamp_h=self._engine.current_time,
+                    rule_id="v2-dispatch",
+                    rule_name=decision.detail,
+                    phase=RulePhase.DISPATCH,
+                    subject_id=decision.trip_id,
+                    action=ActionType.ASSIGN_NEAREST_ELIGIBLE,
+                    detail=decision.detail,
+                ),
+            )
+        self._staging_claims = set()
+        for decision in plan.reposition:
+            vehicle = self._state.vehicles.get(decision.vehicle_id)
+            if vehicle is None:
+                continue
+            if decision.send_to_depot:
+                if pol.depot_release_enabled:
+                    self._try_depot_pull(vehicle, reason=f"playbook: {decision.detail}")
+                continue
+            self._staging_claims.add(
+                (round(decision.staging.lat, 4), round(decision.staging.lon, 4)),
+            )
+            self.reposition_vehicle_to_point(
+                decision.vehicle_id,
+                decision.staging.lat,
+                decision.staging.lon,
+                manual=False,
+                reason=f"playbook → {decision.zone}: {decision.detail}",
+            )
+
+    def _apply_routing_rules_v1(self) -> None:
         """Run dispatch and reposition rules against current world state."""
         rules = self._state.routing_rules
         if not rules.routing_enabled:
@@ -1267,7 +1387,7 @@ class SimulationManager:
         route = self._router.route_between(vehicle.lat, vehicle.lon, fac.lat, fac.lon)
         if route is None:
             return "No route to facility."
-        vehicle.state = VehicleState.REPOSITIONING
+        vehicle.state = VehicleState.TO_FACILITY
         vehicle.assigned_trip_id = None
         self._start_leg(
             vehicle,
@@ -1388,7 +1508,12 @@ class SimulationManager:
         active = sum(
             1
             for v in self._state.vehicles.values()
-            if v.state in (VehicleState.TO_PICKUP, VehicleState.WITH_RIDER, VehicleState.REPOSITIONING)
+            if v.state in (
+                VehicleState.TO_PICKUP,
+                VehicleState.WITH_RIDER,
+                VehicleState.REPOSITIONING,
+                VehicleState.TO_FACILITY,
+            )
         )
         fleet = len(self._state.vehicles) or 1
         pending = sum(1 for t in self._state.trips.values() if t.status == TripStatus.PENDING)
@@ -1559,3 +1684,16 @@ class SimulationManager:
             zone = vehicle_zone(vehicle, self._router)
             supply[zone] = supply.get(zone, 0) + 1
         return supply, self._demand_by_zone()
+
+    def _coverage_supply_by_zone(self) -> dict[str, int]:
+        """Count idle vehicles in-zone plus repositioning vehicles inbound to each zone."""
+        counts: dict[str, int] = {}
+        for vehicle in self._state.vehicles.values():
+            if vehicle.state == VehicleState.IDLE:
+                zone = vehicle_zone(vehicle, self._router)
+                counts[zone] = counts.get(zone, 0) + 1
+            elif vehicle.state == VehicleState.REPOSITIONING and vehicle.active_route_geometry:
+                dest = vehicle.active_route_geometry[-1]
+                zone = zone_for_point(dest.lat, dest.lon)
+                counts[zone] = counts.get(zone, 0) + 1
+        return counts

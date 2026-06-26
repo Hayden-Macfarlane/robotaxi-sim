@@ -17,6 +17,7 @@ class VehicleState(StrEnum):
     TO_PICKUP = "to_pickup"
     WITH_RIDER = "with_rider"
     REPOSITIONING = "repositioning"
+    TO_FACILITY = "to_facility"
     AT_DEPOT = "at_depot"
     CHARGING = "charging"
     MAINTENANCE = "maintenance"
@@ -176,6 +177,10 @@ class OperatorSetup(BaseModel):
     setup_complete: bool = False
     dispatch_assignment_mode: DispatchAssignmentMode | None = None
     advanced_automation_enabled: bool = False
+    routing_engine_version: str = Field(
+        default="v2",
+        description="Routing engine: v1 (legacy), v2 (playbook), shadow (v2 log + v1 execute).",
+    )
 
 
 class DispatchTieBreaker(StrEnum):
@@ -203,10 +208,10 @@ class NetworkPolicy(BaseModel):
     fleet_size: int = Field(default=14, ge=1, le=200)
     base_fare: float = Field(default=8.0, ge=0.0)
     surge_multiplier: float = Field(default=1.0, ge=0.5, le=5.0)
-    reposition_idle_min: float = Field(default=15.0, ge=1.0)
-    auto_dispatch_enabled: bool = True
-    auto_reposition_enabled: bool = True
-    post_trip_reposition_enabled: bool = True
+    reposition_idle_min: float = Field(default=15.0, ge=1.0, description="Deprecated: use playbook const idle_patience_min.")
+    auto_dispatch_enabled: bool = Field(default=True, description="Deprecated: v2 playbook controls dispatch.")
+    auto_reposition_enabled: bool = Field(default=True, description="Deprecated: v2 playbook controls reposition.")
+    post_trip_reposition_enabled: bool = Field(default=True, description="Deprecated: express in v2 playbook.")
     max_idle_per_zone: int = Field(default=3, ge=1, le=50)
     max_idle_by_zone: dict[str, int] = Field(default_factory=dict)
     reposition_idle_min_by_zone: dict[str, float] = Field(default_factory=dict)

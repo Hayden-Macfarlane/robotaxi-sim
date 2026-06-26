@@ -11,6 +11,10 @@ function defaultWsUrl(): string {
   return 'ws://localhost:8001/ws'
 }
 
+function keepCatalog<T>(incoming: T[] | undefined, prev: T[]): T[] {
+  return incoming?.length ? incoming : prev
+}
+
 const EMPTY_SNAPSHOT: SimulationSnapshot = {
   type: 'STATE_SNAPSHOT',
   current_time_h: 0,
@@ -83,9 +87,17 @@ const EMPTY_SNAPSHOT: SimulationSnapshot = {
   operator_presets: [],
   operator_setup: {
     setup_complete: true,
-    dispatch_assignment_mode: 'closest_idle_or_repositioning',
+    dispatch_assignment_mode: 'manual',
     advanced_automation_enabled: false,
+    routing_engine_version: 'v2',
   },
+  playbook_v2: { enabled: true, constants: {}, rules: [] },
+  rule_hits_v2: [],
+  metric_catalog: [],
+  constant_catalog: [],
+  action_catalog: [],
+  selection_catalog: [],
+  rule_templates: [],
   dispatch_candidates: {},
   vehicles: [],
   trips: [],
@@ -105,6 +117,32 @@ export function useSimulation() {
 
   const sendCommand = useCallback((cmd: SimCommand) => {
     wsRef.current?.send(JSON.stringify(cmd))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadCatalogs = async () => {
+      try {
+        const res = await fetch('/catalogs')
+        if (!res.ok) return
+        const data = (await res.json()) as Partial<SimulationSnapshot>
+        if (cancelled) return
+        setSnapshot(prev => ({
+          ...prev,
+          metric_catalog: keepCatalog(data.metric_catalog, prev.metric_catalog ?? []),
+          constant_catalog: keepCatalog(data.constant_catalog, prev.constant_catalog ?? []),
+          action_catalog: keepCatalog(data.action_catalog, prev.action_catalog ?? []),
+          selection_catalog: keepCatalog(data.selection_catalog, prev.selection_catalog ?? []),
+          rule_templates: keepCatalog(data.rule_templates, prev.rule_templates ?? []),
+        }))
+      } catch {
+        /* backend may not be up yet */
+      }
+    }
+    void loadCatalogs()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -146,6 +184,11 @@ export function useSimulation() {
               kpis: incoming.kpis ?? prev.kpis,
               operator_setup: incoming.operator_setup ?? prev.operator_setup,
               map_center: incoming.map_center ?? prev.map_center,
+              metric_catalog: keepCatalog(incoming.metric_catalog, prev.metric_catalog ?? []),
+              constant_catalog: keepCatalog(incoming.constant_catalog, prev.constant_catalog ?? []),
+              action_catalog: keepCatalog(incoming.action_catalog, prev.action_catalog ?? []),
+              selection_catalog: keepCatalog(incoming.selection_catalog, prev.selection_catalog ?? []),
+              rule_templates: keepCatalog(incoming.rule_templates, prev.rule_templates ?? []),
             }))
             setConnecting(false)
           } else if (data.type === 'SYSTEM_ALERT') {

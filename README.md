@@ -53,6 +53,12 @@ frontend/  →  WebSocket  →  api/server.py  →  simulation_loop/manager.py
 
 Fleet ops include forecast-based peak staging, per-zone supply caps, deadhead ROI gates, dispatcher override, special events, depot release valves, and **vehicle health** (battery/condition/cleanliness wear with timed recovery at facilities).
 
+## UI
+
+Rules-first sidebar: **Fleet rules** (Build / Monitor / Library) is the default tab. Use **Library** to browse constraints (metrics) and thresholds (constants) without memorizing IDs. **Live ops** shows fleet and trip queue. **Sim settings** (gear icon) holds dispatch mode, market physics, operations, and performance analytics.
+
+See [AGENTS.md](AGENTS.md) for snapshot catalog fields and WebSocket commands (`SET_PLAYBOOK_V2`, `RESET_PLAYBOOK_V2`, etc.).
+
 ## Tests
 
 ```bash

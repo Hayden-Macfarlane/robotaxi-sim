@@ -23,4 +23,7 @@ def sim_manager() -> SimulationManager:
     clear_city_graph_cache()
     mgr = SimulationManager()
     mgr.reset(seed=42)
+    mgr.state.operator_setup = mgr.state.operator_setup.model_copy(
+        update={"routing_engine_version": "v1"},
+    )
     return mgr

@@ -10,6 +10,7 @@ const STATE_COLOR: Record<string, string> = {
   to_pickup: '#fbbf24',
   with_rider: '#34d399',
   repositioning: '#a78bfa',
+  to_facility: '#14b8a6',
   at_depot: '#64748b',
   charging: '#eab308',
   maintenance: '#f97316',
@@ -18,9 +19,9 @@ const STATE_COLOR: Record<string, string> = {
 
 const LEGEND_ITEMS = [
   { color: '#64748b', label: 'Road Network' },
-  { color: '#f97316', label: 'Zone deficit / below min' },
-  { color: '#ef4444', label: 'Zone at cap' },
-  { color: '#38bdf8', label: 'Zone surplus' },
+  { color: '#3b82f6', label: 'Zone has available supply' },
+  { color: '#f97316', label: 'Zone empty (no waiting rider)' },
+  { color: '#ef4444', label: 'Zone empty + waiting rider' },
   { color: STATE_COLOR.idle, label: 'Idle' },
   { color: '#a855f7', label: 'Depot / Charger' },
   { color: '#ec4899', label: 'Waiting Rider' },
@@ -79,11 +80,11 @@ function facilityIcon(kind: string) {
   })
 }
 
-function zoneStatusColor(row: ZoneBalanceSnap): string {
-  if (row.supply >= row.max_idle) return '#ef4444'
-  if (row.gap > 0.5 || row.supply < row.target_supply) return '#f97316'
-  if (row.gap < -0.5) return '#38bdf8'
-  return '#64748b'
+function zoneCoverageColor(row: ZoneBalanceSnap): string {
+  const available = row.coverage_supply ?? row.supply
+  if (available >= 1) return '#3b82f6'
+  if (row.pending_demand >= 1) return '#ef4444'
+  return '#f97316'
 }
 
 function StagingModeHandler({ stagingActive }: { stagingActive: boolean }) {
@@ -302,7 +303,7 @@ export function CityMap({
 
   const zonePolygons = zoneOverlays.flatMap(overlay => {
     const row = balanceByZone[overlay.zone]
-    const borderColor = row ? zoneStatusColor(row) : '#64748b'
+    const coverageColor = row ? zoneCoverageColor(row) : '#64748b'
     const fillOpacity = overlay.kind === 'poi' ? 0.22 : 0.14
     return overlay.polygons.map((ring, ringIdx) => (
       <Polygon
@@ -319,10 +320,10 @@ export function CityMap({
             : undefined
         }
         pathOptions={{
-          color: borderColor,
-          fillColor: overlay.color,
+          color: coverageColor,
+          fillColor: coverageColor,
           fillOpacity,
-          weight: row && (row.gap > 0.5 || row.supply >= row.max_idle || row.supply < row.target_supply) ? 2.5 : 1.5,
+          weight: row ? 2 : 1.5,
           opacity: 0.75,
         }}
       >
@@ -332,11 +333,11 @@ export function CityMap({
             {row && (
               <>
                 <br />
+                Available: {row.coverage_supply ?? row.supply} · Waiting: {row.pending_demand}
+                <br />
                 Idle: {row.supply}/{row.max_idle} · Min target: {row.target_supply}
                 <br />
-                Pending: {row.pending_demand} · Expected: {row.expected_demand.toFixed(1)}
-                <br />
-                Gap: {row.gap.toFixed(1)}
+                Expected demand: {row.expected_demand.toFixed(1)} · Gap: {row.gap.toFixed(1)}
               </>
             )}
           </Popup>

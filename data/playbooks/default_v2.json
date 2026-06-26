@@ -1,0 +1,274 @@
+{
+  "enabled": true,
+  "constants": {
+    "idle_patience_min": 15.0,
+    "forecast_rising_threshold": 1.5,
+    "max_reposition_min": 45.0,
+    "min_reposition_benefit": 0.5,
+    "max_distance_from_nearest_asset_km": 2.0,
+    "deadzone_fill_ratio_threshold": 1.0,
+    "cluster_radius_km": 0.8,
+    "min_density_ratio": 0.5
+  },
+  "rules": [
+    {
+      "id": "v2-serve-pending",
+      "name": "Serve waiting riders",
+      "enabled": true,
+      "priority": 10,
+      "phase": "dispatch",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "zone.pending_demand",
+          "params": {}
+        },
+        "operator": "gte",
+        "value": 1.0,
+        "value_max": null,
+        "right_metric": null,
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "assign_vehicle",
+        "params": {
+          "preempt_reposition": true
+        },
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-surplus-evict",
+      "name": "Leave crowded zone",
+      "enabled": true,
+      "priority": 20,
+      "phase": "reposition",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "zone.surplus",
+          "params": {}
+        },
+        "operator": "gte",
+        "value": 1.0,
+        "value_max": null,
+        "right_metric": null,
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "reposition_to_best_deficit",
+        "params": {},
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-idle-relocate",
+      "name": "Relocate if idle too long",
+      "enabled": true,
+      "priority": 30,
+      "phase": "reposition",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "vehicle.idle_minutes",
+          "params": {}
+        },
+        "operator": "gte",
+        "value": null,
+        "value_max": null,
+        "right_metric": {
+          "id": "const.value",
+          "params": {
+            "name": "idle_patience_min"
+          }
+        },
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "reposition_to_best_deficit",
+        "params": {},
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-forecast-staging",
+      "name": "Stage for forecast peak",
+      "enabled": true,
+      "priority": 40,
+      "phase": "reposition",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "zone.forecast_rising",
+          "params": {}
+        },
+        "operator": "gte",
+        "value": null,
+        "value_max": null,
+        "right_metric": {
+          "id": "const.value",
+          "params": {
+            "name": "forecast_rising_threshold"
+          }
+        },
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "reposition_to_best_deficit",
+        "params": {},
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-deadzone-fill",
+      "name": "Fill coverage deadzone",
+      "enabled": true,
+      "priority": 45,
+      "phase": "reposition",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "vehicle.deadzone_size_km",
+          "params": {}
+        },
+        "operator": "gt",
+        "value": 0.0,
+        "value_max": null,
+        "right_metric": null,
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "reposition_to_nearest_density_floor",
+        "params": {
+          "min_density_ratio": 0.0,
+          "radius_km": 1.0
+        },
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-break-clusters",
+      "name": "Break idle clusters",
+      "enabled": true,
+      "priority": 50,
+      "phase": "reposition",
+      "when": {
+        "op": "and",
+        "metric": null,
+        "operator": null,
+        "value": null,
+        "value_max": null,
+        "right_metric": null,
+        "children": [
+          {
+            "op": "compare",
+            "metric": {
+              "id": "vehicle.nearest_idle_km",
+              "params": {}
+            },
+            "operator": "lt",
+            "value": null,
+            "value_max": null,
+            "right_metric": {
+              "id": "const.value",
+              "params": {
+                "name": "cluster_radius_km"
+              }
+            },
+            "children": []
+          },
+          {
+            "op": "compare",
+            "metric": {
+              "id": "vehicle.is_most_crowded_in_radius",
+              "params": {
+                "radius_km": 0.8
+              }
+            },
+            "operator": "eq",
+            "value": 1.0,
+            "value_max": null,
+            "right_metric": null,
+            "children": []
+          }
+        ]
+      },
+      "selection": "most_crowded",
+      "selection_metric": null,
+      "selection_params": {
+        "radius_km": 0.8
+      },
+      "action": {
+        "type": "reposition_to_nearest_density_floor",
+        "params": {
+          "min_density_ratio": 0.5,
+          "radius_km": 1.0
+        },
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    },
+    {
+      "id": "v2-zone-cap-depot",
+      "name": "Evict over zone cap to depot",
+      "enabled": true,
+      "priority": 60,
+      "phase": "reposition",
+      "when": {
+        "op": "compare",
+        "metric": {
+          "id": "zone.surplus",
+          "params": {}
+        },
+        "operator": "gte",
+        "value": 1.0,
+        "value_max": null,
+        "right_metric": null,
+        "children": []
+      },
+      "selection": "all_matching",
+      "selection_metric": null,
+      "selection_params": {},
+      "action": {
+        "type": "send_to_facility",
+        "params": {},
+        "constraints": null,
+        "rank_by": null,
+        "filter": null
+      },
+      "rank_by": null
+    }
+  ]
+}

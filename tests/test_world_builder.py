@@ -6,7 +6,7 @@ from collections import Counter
 
 import pytest
 
-from core_data.models import NetworkPolicy, TripStatus
+from core_data.models import NetworkPolicy
 from routing.zones import all_zone_names, zone_for_point
 from simulation_loop.manager import SimulationManager
 from simulation_loop.world_builder import _zone_fleet_assignments, build_world
@@ -27,8 +27,6 @@ def test_build_world_places_one_vehicle_per_zone() -> None:
     assert len(zone_counts) >= len(zones) - 1
 
 
-def test_reset_seeds_pending_trips(sim_manager: SimulationManager) -> None:
-    """Reset seeds two trips; auto-dispatch assigns them immediately."""
-    trips = list(sim_manager.state.trips.values())
-    assert len(trips) == 2
-    assert any(t.status == TripStatus.MATCHED for t in trips)
+def test_reset_has_no_initial_trips(sim_manager: SimulationManager) -> None:
+    """Reset does not seed pending trips — operator rules dispatch demand."""
+    assert len(sim_manager.state.trips) == 0

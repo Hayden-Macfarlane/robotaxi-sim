@@ -5,6 +5,7 @@ import type {
   SimCommand,
   TripSnap,
 } from '../types/simulation'
+import type { RuleHitV2 } from '../types/playbook'
 import { useUiMode } from '../contexts/UiModeContext'
 import { labelForTerm } from '../lib/fleetTerminology'
 import { statusLabel } from '../lib/vehicleLabels'
@@ -60,14 +61,15 @@ interface Props {
   trips: TripSnap[]
   dispatchCandidates: Record<string, DispatchCandidateSnap[]>
   dispatchMode: DispatchAssignmentMode | null
+  ruleHitsV2?: RuleHitV2[]
   onCommand: (cmd: SimCommand) => void
 }
 
 /** Open order queue with manual dispatch and ranked vehicle suggestions. */
-export function TripQueuePanel({ trips, dispatchCandidates, dispatchMode, onCommand }: Props) {
+export function TripQueuePanel({ trips, dispatchCandidates, dispatchMode, ruleHitsV2 = [], onCommand }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [explainVehicleId, setExplainVehicleId] = useState<string | null>(null)
-  const { uiMode } = useUiMode()
+  const { uiMode, navigate } = useUiMode()
   const isManual = dispatchMode === 'manual'
 
   const pending = trips.filter(t => t.status === 'pending')
@@ -128,6 +130,27 @@ export function TripQueuePanel({ trips, dispatchCandidates, dispatchMode, onComm
                   Auto: {MODE_LABELS[dispatchMode]}
                 </div>
               )}
+              {(() => {
+                const hit = [...ruleHitsV2].reverse().find(h => h.phase === 'dispatch' && h.subject_id === t.id && h.matched)
+                if (!hit) return null
+                return (
+                  <div className="text-[10px] text-text-secondary mb-1 p-1.5 rounded bg-surface-base/60 border border-border-default/40">
+                    <span className="text-accent">Rule fired:</span> {hit.rule_name} — {hit.detail}
+                    {hit.metric_values && Object.keys(hit.metric_values).length > 0 && (
+                      <div className="font-mono text-[9px] mt-0.5 opacity-80">
+                        {Object.entries(hit.metric_values).slice(0, 4).map(([k, v]) => `${k}=${String(v)}`).join(' · ')}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => navigate({ tab: 'rules', rulesSubTab: 'monitor' })}
+                      className="text-accent hover:underline mt-1 block"
+                    >
+                      View in Rules → Monitor
+                    </button>
+                  </div>
+                )
+              })()}
 
               {isManual && (
                 <>

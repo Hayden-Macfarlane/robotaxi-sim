@@ -2,13 +2,7 @@
 
 export type TermCategory = 'dispatch' | 'supply' | 'economics' | 'automation' | 'network' | 'fleet'
 
-export type PolicySubTab =
-  | 'matching'
-  | 'supply'
-  | 'automation'
-  | 'network'
-  | 'market'
-  | 'operations'
+export type PolicySubTab = 'rules' | 'market' | 'operations'
 
 export interface FleetTerm {
   id: string
@@ -83,7 +77,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Match score',
     plainLabel: 'Match score',
     description: 'Lower is better. Combines pickup ETA, zone balance, and penalties.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_weight_eta',
@@ -92,7 +86,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     plainLabel: 'Closeness to pickup',
     description: 'How strongly closer-to-pickup beats other factors when auto-assigning.',
     affects: ['Match score', 'Open orders wait'],
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_weight_surge',
@@ -100,7 +94,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Surge bias',
     plainLabel: 'Surge pricing bias',
     description: 'Bonus for assigning during high surge periods when weight is set.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_weight_zone_balance',
@@ -108,7 +102,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Same-zone pickup bonus',
     plainLabel: 'Local pickup preference',
     description: 'Prefer vehicles already in the trip pickup zone.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'cross_zone_dispatch_penalty_min',
@@ -116,7 +110,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Cross-zone penalty',
     plainLabel: 'Cross-zone pickup penalty',
     description: 'Extra minutes added to match score when vehicle and pickup are in different zones.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'max_deadhead_to_pickup_min',
@@ -124,7 +118,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Max deadhead to pickup',
     plainLabel: 'Max empty drive to pickup',
     description: 'Hard cap on empty travel time to reach pickup (0 = disabled).',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_consider_dropoff_balance',
@@ -132,7 +126,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Dropoff rebalancing',
     plainLabel: 'Consider destination zone',
     description: 'Rank vehicles by where the trip ends — prefer landing in under-supplied zones.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_weight_dropoff_balance',
@@ -140,7 +134,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Dropoff deficit bonus',
     plainLabel: 'Under-supplied zone bonus',
     description: 'Score bonus when the trip dropoff helps fill a supply shortage.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'dispatch_penalty_dropoff_surplus_min',
@@ -148,7 +142,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Dropoff surplus penalty',
     plainLabel: 'Over-cap zone penalty',
     description: 'Score penalty when the trip would overcrowd the destination zone.',
-    policySubTab: 'matching',
+    policySubTab: 'rules',
   },
   {
     id: 'target_supply_by_zone',
@@ -156,7 +150,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Supply floor',
     plainLabel: 'Minimum idle cars',
     description: 'Target idle vehicles per zone before rebalancing pulls cars away.',
-    policySubTab: 'supply',
+    policySubTab: 'rules',
   },
   {
     id: 'max_idle_by_zone',
@@ -164,7 +158,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Idle vehicle cap',
     plainLabel: 'Max empty cars',
     description: 'Maximum idle vehicles allowed in a zone before surplus rules fire.',
-    policySubTab: 'supply',
+    policySubTab: 'rules',
   },
   {
     id: 'reposition_idle_min_by_zone',
@@ -172,7 +166,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Rebalancing patience',
     plainLabel: 'Idle wait before move',
     description: 'Minutes a car waits idle before rebalancing rules can move it.',
-    policySubTab: 'supply',
+    policySubTab: 'rules',
   },
   {
     id: 'auto_dispatch_by_zone',
@@ -180,7 +174,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Zone auto-dispatch',
     plainLabel: 'Auto-assign by area',
     description: 'Whether trips originating in this zone are auto-matched to vehicles.',
-    policySubTab: 'supply',
+    policySubTab: 'rules',
   },
   {
     id: 'zone_demand_weights',
@@ -188,7 +182,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Demand weight',
     plainLabel: 'Trip spawn weight',
     description: 'Relative trip generation rate for forecast and demand curves.',
-    policySubTab: 'supply',
+    policySubTab: 'rules',
   },
   {
     id: 'deadhead_cost_per_min',
@@ -196,7 +190,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Deadhead cost',
     plainLabel: 'Empty-mile cost per minute',
     description: 'Used in rebalancing ROI and profit KPI calculations.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'min_reposition_benefit',
@@ -204,7 +198,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Min rebalancing ROI',
     plainLabel: 'Min benefit to move empty car',
     description: 'Minimum expected value before an idle car repositions.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'auto_dispatch_enabled',
@@ -212,7 +206,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Auto-dispatch',
     plainLabel: 'Auto-assign trips',
     description: 'Master switch for automatic trip-to-vehicle matching.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'global_traffic_multiplier',
@@ -220,7 +214,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Traffic multiplier',
     plainLabel: 'Road congestion factor',
     description: 'Scales all travel times (1.0 = normal, higher = slower traffic).',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'max_distance_from_nearest_asset_km',
@@ -228,7 +222,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Max asset coverage radius',
     plainLabel: 'Max distance from nearest idle car',
     description: 'Zones whose centroid is farther than this from any idle vehicle are treated as deadzones.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'deadzone_fill_ratio_threshold',
@@ -236,7 +230,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Deadzone fill ratio threshold',
     plainLabel: 'Min size-to-travel ratio',
     description: 'Fill a deadzone only when (deadzone size + adjustment) / (travel distance + adjustment) meets this minimum.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'deadzone_size_adjustment_km',
@@ -244,7 +238,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Deadzone size adjustment',
     plainLabel: 'Coverage gap bonus (km)',
     description: 'Added to deadzone size in the fill ratio numerator — favors filling larger gaps.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'deadzone_travel_adjustment_km',
@@ -252,7 +246,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Travel distance adjustment',
     plainLabel: 'Deadhead penalty (km)',
     description: 'Added to travel distance in the fill ratio denominator — penalizes longer reposition drives.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'deadzone_filler_enabled',
@@ -260,7 +254,7 @@ export const FLEET_TERMS: FleetTerm[] = [
     industryLabel: 'Deadzone filler',
     plainLabel: 'Auto-fill coverage gaps',
     description: 'When routing rules do not reposition, send idle cars to zones lacking nearby assets if the fill ratio passes.',
-    policySubTab: 'network',
+    policySubTab: 'rules',
   },
   {
     id: 'base_trips_per_hour',
@@ -335,10 +329,7 @@ export const CATEGORY_LABELS: Record<TermCategory, string> = {
 }
 
 export const POLICY_SUBTAB_LABELS: Record<PolicySubTab, { industry: string; plain: string }> = {
-  matching: { industry: 'Matching weights', plain: 'How vehicles are ranked' },
-  supply: { industry: 'Supply by zone', plain: 'Floors, caps, auto-dispatch' },
-  automation: { industry: 'Automation playbook', plain: 'IF/THEN rules' },
-  network: { industry: 'Network constraints', plain: 'Master switches & ROI' },
+  rules: { industry: 'Rule studio', plain: 'Fleet rules' },
   market: { industry: 'Market & demand', plain: 'Pricing, events, wear' },
   operations: { industry: 'Operations', plain: 'Scenarios, alerts, health' },
 }
