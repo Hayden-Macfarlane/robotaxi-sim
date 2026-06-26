@@ -1,24 +1,26 @@
 import { useState } from 'react'
 import { useSimulation } from './hooks/useSimulation'
-import { AssetsPanel } from './components/AssetsPanel'
-import { AutomationPanel } from './components/AutomationPanel'
+import { UiModeProvider, useUiMode } from './contexts/UiModeContext'
 import { CityMap } from './components/CityMap'
-import { DemandPanel } from './components/DemandPanel'
 import { KpiStrip } from './components/KpiStrip'
-import { OpsLogPanel } from './components/OpsLogPanel'
-import { TripQueuePanel } from './components/TripQueuePanel'
-import { RoutingPanel } from './components/RoutingPanel'
-import { SidebarTabs, type SidebarTabId } from './components/ui/SidebarTabs'
+import { LivePanel } from './components/LivePanel'
+import { DispatchPanel } from './components/DispatchPanel'
+import { PolicyPanel } from './components/PolicyPanel'
+import { AnalyticsPanel } from './components/AnalyticsPanel'
+import { GlossaryDrawer } from './components/GlossaryDrawer'
+import { ReleaseZonePicker } from './components/ReleaseZonePicker'
+import { SidebarTabs } from './components/ui/SidebarTabs'
 import { PlaybackSpeedControl, DEFAULT_PLAYBACK_SPEED } from './components/PlaybackSpeedControl'
 import { SimButton } from './components/ui/SimButton'
 
-/** Robotaxi manager control tower shell. */
-export default function App() {
+/** Inner shell — requires UiModeProvider. */
+function AppShell() {
   const { snapshot, connected, connecting, alert, setAlert, sendCommand } = useSimulation()
-  const [activeTab, setActiveTab] = useState<SidebarTabId>('automation')
+  const { activeTab, setActiveTab, uiMode, setUiMode, setGlossaryOpen } = useUiMode()
   const [stagingVehicleId, setStagingVehicleId] = useState<string | null>(null)
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([])
   const [highlightVehicleId, setHighlightVehicleId] = useState<string | null>(null)
+  const [releaseVehicleId, setReleaseVehicleId] = useState<string | null>(null)
   const [panTo, setPanTo] = useState<{ lat: number; lon: number } | null>(null)
 
   const toggleSelect = (vehicleId: string) => {
@@ -30,6 +32,14 @@ export default function App() {
   const clearStaging = () => {
     setStagingVehicleId(null)
     setSelectedVehicleIds([])
+  }
+
+  const selectVehicleForStaging = (vehicleId: string | null) => {
+    setStagingVehicleId(vehicleId)
+    if (vehicleId) {
+      const v = snapshot.vehicles.find(x => x.id === vehicleId)
+      if (v) setPanTo({ lat: v.lat, lon: v.lon })
+    }
   }
 
   const operatorSetup = snapshot.operator_setup ?? {
@@ -54,6 +64,29 @@ export default function App() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex rounded-md border border-border-default overflow-hidden text-xs">
+            <button
+              type="button"
+              onClick={() => setUiMode('standard')}
+              className={`px-2.5 py-1.5 transition-colors ${uiMode === 'standard' ? 'bg-accent text-white' : 'bg-surface-raised text-text-secondary hover:text-text-primary'}`}
+            >
+              Standard
+            </button>
+            <button
+              type="button"
+              onClick={() => setUiMode('expert')}
+              className={`px-2.5 py-1.5 transition-colors ${uiMode === 'expert' ? 'bg-accent text-white' : 'bg-surface-raised text-text-secondary hover:text-text-primary'}`}
+            >
+              Expert
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGlossaryOpen(true)}
+            className="px-2.5 py-1.5 text-xs rounded border border-border-default bg-surface-raised hover:bg-surface-base text-text-secondary hover:text-text-primary"
+          >
+            Fleet glossary
+          </button>
           <PlaybackSpeedControl
             speed={snapshot.speed_multiplier || DEFAULT_PLAYBACK_SPEED}
             onCommand={sendCommand}
@@ -78,10 +111,17 @@ export default function App() {
         connected={connected}
       />
 
-      {alert && (
-        <div className="px-5 py-2 bg-red-950 border-b border-red-800 text-red-200 text-sm flex justify-between items-center">
-          <span>{alert}</span>
-          <button type="button" onClick={() => setAlert(null)} className="text-red-300 hover:text-red-100 px-2 py-0.5 rounded hover:bg-red-900/50">Dismiss</button>
+      {(alert || (snapshot.operator_alerts?.length ?? 0) > 0) && (
+        <div className="px-5 py-2 bg-red-950 border-b border-red-800 text-red-200 text-sm flex flex-col gap-1">
+          {alert && (
+            <div className="flex justify-between items-center">
+              <span>{alert}</span>
+              <button type="button" onClick={() => setAlert(null)} className="text-red-300 hover:text-red-100 px-2 py-0.5 rounded hover:bg-red-900/50">Dismiss</button>
+            </div>
+          )}
+          {snapshot.operator_alerts?.map(a => (
+            <div key={a.code} className={a.level === 'info' ? 'text-amber-200' : 'text-red-200'}>{a.message}</div>
+          ))}
         </div>
       )}
 
@@ -97,62 +137,82 @@ export default function App() {
             panTo={panTo}
             onCommand={sendCommand}
             onClearStaging={clearStaging}
+            onSelectVehicle={selectVehicleForStaging}
+            onRequestRelease={setReleaseVehicleId}
           />
         </div>
         <aside className="w-96 border-l border-border-default bg-surface-base flex flex-col overflow-hidden">
           <SidebarTabs active={activeTab} onChange={setActiveTab} />
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-            {activeTab === 'assets' && (
-              <AssetsPanel
+            {activeTab === 'live' && (
+              <LivePanel
                 vehicles={snapshot.vehicles}
                 facilities={snapshot.facilities ?? []}
                 kpis={snapshot.kpis}
+                trips={snapshot.trips}
+                dispatchCandidates={snapshot.dispatch_candidates ?? {}}
+                dispatchMode={operatorSetup.dispatch_assignment_mode}
+                dispatchActions={snapshot.recent_dispatch_actions ?? []}
+                simStartIso={snapshot.sim_start_iso}
                 stagingVehicleId={stagingVehicleId}
                 selectedVehicleIds={selectedVehicleIds}
                 highlightVehicleId={highlightVehicleId}
-                onSelectVehicle={setStagingVehicleId}
+                onSelectVehicle={selectVehicleForStaging}
                 onToggleSelect={toggleSelect}
                 onHighlightVehicle={setHighlightVehicleId}
                 onPanToFacility={(lat, lon) => setPanTo({ lat, lon })}
+                onRequestRelease={setReleaseVehicleId}
                 onCommand={sendCommand}
               />
             )}
-            {activeTab === 'routing' && (
-              <RoutingPanel
+            {activeTab === 'dispatch' && (
+              <DispatchPanel operatorSetup={operatorSetup} onCommand={sendCommand} />
+            )}
+            {activeTab === 'policy' && (
+              <PolicyPanel
+                policy={snapshot.policy}
                 ruleSet={snapshot.routing_rules ?? { routing_enabled: false, rules: [] }}
                 ruleHits={snapshot.routing_rule_hits ?? []}
                 operatorSetup={operatorSetup}
-                onCommand={sendCommand}
-              />
-            )}
-            {activeTab === 'automation' && (
-              <AutomationPanel policy={snapshot.policy} operatorSetup={operatorSetup} onCommand={sendCommand} />
-            )}
-            {activeTab === 'demand' && (
-              <DemandPanel
-                policy={snapshot.policy}
                 forecast={snapshot.forecast_by_zone ?? []}
                 events={snapshot.special_events ?? []}
                 zoneBalance={snapshot.zone_balance ?? []}
                 currentTimeH={snapshot.current_time_h}
-                operatorSetup={operatorSetup}
                 onCommand={sendCommand}
               />
             )}
-            {activeTab === 'activity' && (
-              <div className="flex flex-col p-3 pb-4 gap-3">
-                <TripQueuePanel
-                  trips={snapshot.trips}
-                  dispatchCandidates={snapshot.dispatch_candidates ?? {}}
-                  dispatchMode={operatorSetup.dispatch_assignment_mode}
-                  onCommand={sendCommand}
-                />
-                <OpsLogPanel actions={snapshot.recent_dispatch_actions ?? []} simStartIso={snapshot.sim_start_iso} />
-              </div>
+            {activeTab === 'analyze' && (
+              <AnalyticsPanel
+                kpis={snapshot.kpis}
+                kpiSeries={snapshot.kpi_series ?? []}
+                experimentRuns={snapshot.experiment_runs ?? []}
+                operatorPresets={snapshot.operator_presets ?? []}
+                policy={snapshot.policy}
+                seed={snapshot.seed ?? 42}
+                onCommand={sendCommand}
+              />
             )}
           </div>
         </aside>
       </div>
+      <GlossaryDrawer />
+      {releaseVehicleId && (
+        <ReleaseZonePicker
+          vehicleId={releaseVehicleId}
+          zoneBalance={snapshot.zone_balance ?? []}
+          onCommand={sendCommand}
+          onClose={() => setReleaseVehicleId(null)}
+        />
+      )}
     </div>
+  )
+}
+
+/** Robotaxi manager control tower shell. */
+export default function App() {
+  return (
+    <UiModeProvider>
+      <AppShell />
+    </UiModeProvider>
   )
 }

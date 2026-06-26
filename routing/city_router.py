@@ -132,10 +132,14 @@ class CityRouter:
         lon1: float,
         lat2: float,
         lon2: float,
+        *,
+        traffic_multiplier: float = 1.0,
     ) -> float | None:
         """Return minimum travel time in minutes between two arbitrary coordinates."""
         leg = self.route_between(lat1, lon1, lat2, lon2)
-        return leg.travel_time_min if leg else None
+        if leg is None:
+            return None
+        return leg.travel_time_min * traffic_multiplier
 
     def find_shortest_path(
         self,

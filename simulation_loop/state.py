@@ -6,8 +6,11 @@ from dataclasses import dataclass, field
 
 from core_data.models import (
     DispatchAction,
+    ExperimentRun,
     Facility,
+    KpiSample,
     NetworkPolicy,
+    OperatorPreset,
     OperatorSetup,
     SpecialEvent,
     TripRequest,
@@ -37,3 +40,5 @@ class SimulationState:
     reposition_km: float = 0.0
     reposition_min: float = 0.0
     revenue_km: float = 0.0
+    kpi_series: list[KpiSample] = field(default_factory=list)
+    last_kpi_sample_h: float = -1.0

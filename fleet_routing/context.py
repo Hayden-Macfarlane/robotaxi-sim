@@ -68,6 +68,12 @@ class RoutingContext:
 
         return zone_for_point(trip.origin.lat, trip.origin.lon)
 
+    def trip_dropoff_zone(self, trip: TripRequest) -> str:
+        """Resolve dropoff zone for ``trip``."""
+        from routing.zones import zone_for_point
+
+        return zone_for_point(trip.destination.lat, trip.destination.lon)
+
     def _cap_for_zone(self, zone: str) -> int:
         if zone in self.policy.max_idle_by_zone:
             return self.policy.max_idle_by_zone[zone]

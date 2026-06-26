@@ -6,16 +6,20 @@ import json
 import os
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from core_data.models import (
     DispatchAction,
     DispatchAssignmentMode,
+    ExperimentRun,
     GeoPoint,
+    KpiSample,
     NetworkPolicy,
+    OperatorPreset,
     OperatorSetup,
     RouteLeg,
+    ScenarioPreset,
     SpecialEvent,
     TripRequest,
     TripStatus,
@@ -23,10 +27,14 @@ from core_data.models import (
     VehicleState,
 )
 from demand import DemandGenerator
-from dispatch.matcher import rank_dispatch_candidates
+from dispatch.batch_matcher import batch_assign_trips, zone_dispatch_enabled
+from dispatch.matcher import dispatch_zone_context_from_rows, estimate_trip_fare, rank_dispatch_candidates
+from dispatch.deadzone import pick_deadzone_fill_decision
 from dispatch.reposition import (
     expected_demand_by_zone,
     forecast_snapshot,
+    pick_staging_point,
+    should_post_trip_reposition,
     vehicle_zone,
     zone_balances,
     zone_cap,
@@ -38,7 +46,7 @@ from fleet_routing.defaults import (
     manual_first_routing_rules,
 )
 from fleet_routing.engine import RuleEvaluator
-from fleet_routing.models import ActionType, RoutingRuleSet
+from fleet_routing.models import ActionType, RoutingRuleHit, RoutingRuleSet, RulePhase
 from fleet.health import (
     SERVICE_STATES,
     apply_movement_wear,
@@ -52,6 +60,10 @@ from fleet.health import (
 from event_engine.engine import Event, EventType, SimulationEngine
 from routing.city_router import CityRouter
 from routing.zones import zone_for_point, zone_overlay_snapshot, all_zone_names
+from experiment.ledger import ExperimentLedger
+from simulation_loop.fleet_ops import compute_operator_alerts, resize_fleet
+from simulation_loop.preset_store import PresetStore
+from simulation_loop.scenarios import scenario_policy_patch
 from simulation_loop.state import SimulationState
 from simulation_loop.world_builder import build_world
 
@@ -61,6 +73,8 @@ MINUTES_PER_HOUR = 60.0
 MAX_STREET_LINES_IN_SNAPSHOT = 4000
 MAX_DISPATCH_LOG = 50
 MAX_ROUTING_RULE_HITS = 30
+MAX_KPI_SERIES = 96
+KPI_SAMPLE_INTERVAL_H = 0.25
 OFF_STREET_STATES = SERVICE_STATES
 AUSTIN_TZ = ZoneInfo("America/Chicago")
 DEFAULT_SIM_START = datetime(2025, 6, 20, 17, 0, 0, tzinfo=AUSTIN_TZ)
@@ -81,6 +95,10 @@ class SimulationManager:
     _street_lines: list[list[list[float]]] | None = field(default=None)
     _staging_claims: set[tuple[float, float]] = field(default_factory=set)
     _sim_start: datetime = field(default_factory=lambda: DEFAULT_SIM_START)
+    _seed: int = 42
+    _run_counter: int = 0
+    _ledger: ExperimentLedger = field(default_factory=ExperimentLedger)
+    _presets: PresetStore = field(default_factory=PresetStore)
 
     def __post_init__(self) -> None:
         if not isinstance(self._rng, random.Random):
@@ -109,6 +127,7 @@ class SimulationManager:
             self._city = city
         else:
             self._city = os.environ.get("ROBOTAXI_CITY", "austin")
+        self._seed = seed
         self._engine = SimulationEngine(initial_time=0.0)
         self._rng = random.Random(seed)
         self._demand.set_seed(seed)
@@ -126,16 +145,18 @@ class SimulationManager:
 
     def _apply_startup_defaults(self) -> None:
         """Reset policy to auto-dispatch closest idle/repositioning vehicles on startup."""
-        self._state.policy = self._state.policy.model_copy(
-            update={
-                "auto_reposition_enabled": False,
-                "post_trip_reposition_enabled": False,
-            },
-        )
         self.set_operator_setup(
             dispatch_assignment_mode=DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING,
             advanced_automation_enabled=False,
         )
+        self._sync_demand_from_policy()
+
+    def _sync_demand_from_policy(self) -> None:
+        """Apply demand levers from network policy to the demand generator."""
+        pol = self._state.policy
+        self._demand.base_trips_per_hour = pol.base_trips_per_hour
+        if pol.zone_demand_weights:
+            self._demand.set_zone_weights(pol.zone_demand_weights)
 
     def set_operator_setup(
         self,
@@ -220,6 +241,8 @@ class SimulationManager:
         self._apply_routing_rules()
         self._check_vehicle_health()
         self._cancel_stale_trips()
+        self._check_dispatch_failover()
+        self._maybe_sample_kpis()
 
     def set_routing_rules(self, rule_set: RoutingRuleSet) -> None:
         """Replace the operator routing playbook."""
@@ -235,6 +258,81 @@ class SimulationManager:
             update={k: v for k, v in kwargs.items() if v is not None},
         )
         self._state.policy = pol
+        self._sync_demand_from_policy()
+        target = pol.fleet_size
+        if target != len(self._state.vehicles):
+            zones = all_zone_names()
+            self._state.vehicles = resize_fleet(
+                self._state.vehicles,
+                target,
+                self._router,
+                self._rng,
+                zones,
+            )
+
+    def apply_scenario(self, preset: ScenarioPreset) -> None:
+        """Apply a named scenario preset to network policy."""
+        patch = scenario_policy_patch(preset)
+        self.set_network_policy(**patch)
+
+    def cancel_trip(self, trip_id: str) -> str | None:
+        """Force-cancel a pending or matched trip."""
+        trip = self._state.trips.get(trip_id)
+        if trip is None:
+            return f"Unknown trip '{trip_id}'."
+        if trip.status in (TripStatus.COMPLETED, TripStatus.CANCELLED):
+            return f"Trip '{trip_id}' is already {trip.status.value}."
+        if trip.matched_vehicle_id:
+            vehicle = self._state.vehicles.get(trip.matched_vehicle_id)
+            if vehicle and vehicle.assigned_trip_id == trip_id:
+                self._clear_leg(vehicle)
+                self._engine.cancel_events_for_entity(vehicle.id, event_type=EventType.VEHICLE_ARRIVE)
+                vehicle.state = VehicleState.IDLE
+                vehicle.assigned_trip_id = None
+                vehicle.idle_since_h = self._engine.current_time
+        trip.status = TripStatus.CANCELLED
+        trip.matched_vehicle_id = None
+        self._state.trips_cancelled += 1
+        return None
+
+    def delete_special_event(self, event_id: str) -> str | None:
+        """Remove a scheduled special event."""
+        before = len(self._state.special_events)
+        self._state.special_events = [e for e in self._state.special_events if e.id != event_id]
+        if len(self._state.special_events) == before:
+            return f"Unknown event '{event_id}'."
+        self._demand.set_events(self._state.special_events)
+        return None
+
+    def update_special_event(
+        self,
+        event_id: str,
+        *,
+        label: str | None = None,
+        zone: str | None = None,
+        start_h: float | None = None,
+        end_h: float | None = None,
+        demand_multiplier: float | None = None,
+    ) -> str | None:
+        """Edit an existing special event."""
+        for i, ev in enumerate(self._state.special_events):
+            if ev.id != event_id:
+                continue
+            data = ev.model_dump()
+            if label is not None:
+                data["label"] = label
+            if zone is not None:
+                data["zone"] = zone
+            if start_h is not None:
+                data["start_h"] = start_h
+            if end_h is not None:
+                data["end_h"] = end_h
+            if demand_multiplier is not None:
+                data["demand_multiplier"] = demand_multiplier
+            self._state.special_events[i] = SpecialEvent.model_validate(data)
+            self._demand.set_events(self._state.special_events)
+            return None
+        return f"Unknown event '{event_id}'."
 
     def create_special_event(
         self,
@@ -270,7 +368,7 @@ class SimulationManager:
             return "; ".join(errors)
         return None
 
-    def send_to_facility(self, vehicle_id: str, facility_id: str) -> str | None:
+    def send_to_facility(self, vehicle_id: str, facility_id: str, *, manual: bool = False) -> str | None:
         """Route an on-street vehicle to a depot or charger."""
         vehicle = self._state.vehicles.get(vehicle_id)
         fac = self._state.facilities.get(facility_id)
@@ -280,26 +378,49 @@ class SimulationManager:
             return f"Unknown facility '{facility_id}'."
         if vehicle.state not in (VehicleState.IDLE, VehicleState.REPOSITIONING):
             return f"Vehicle '{vehicle_id}' is not available."
+        if vehicle.state == VehicleState.REPOSITIONING:
+            self._clear_leg(vehicle)
+            self._engine.cancel_events_for_entity(
+                vehicle.id,
+                event_type=EventType.VEHICLE_ARRIVE,
+            )
+            vehicle.state = VehicleState.IDLE
         parked = sum(
             1 for v in self._state.vehicles.values()
             if v.facility_id == facility_id and v.state in OFF_STREET_STATES
         )
         if parked >= fac.capacity:
             return f"Facility '{facility_id}' is at capacity."
-        return self._route_to_facility(vehicle, fac)
+        return self._route_to_facility(vehicle, fac, manual=manual)
 
-    def release_from_facility(self, vehicle_id: str) -> str | None:
-        """Return a depot/charging vehicle to on-street idle service."""
+    def release_from_facility(self, vehicle_id: str, zone: str) -> str | None:
+        """Route a facility vehicle to an operator-chosen zone staging point."""
         vehicle = self._state.vehicles.get(vehicle_id)
         if vehicle is None:
             return f"Unknown vehicle '{vehicle_id}'."
         if vehicle.state not in OFF_STREET_STATES:
             return f"Vehicle '{vehicle_id}' is not at a facility."
-        vehicle.state = VehicleState.IDLE
+        if zone not in all_zone_names():
+            return f"Unknown zone '{zone}'."
+        supply, _ = self._zone_heatmaps()
+        cap = zone_cap(self._state.policy, zone)
+        if supply.get(zone, 0) >= cap:
+            return f"Zone '{zone}' is at idle cap ({cap})."
+        staging = pick_staging_point(self._router, zone, claimed=set(), rng=self._rng)
+        if staging is None:
+            return f"No staging point in zone '{zone}'."
+        self._engine.cancel_events_for_entity(vehicle.id, event_type=EventType.VEHICLE_ARRIVE)
+        self._clear_leg(vehicle)
         vehicle.facility_id = None
-        vehicle.idle_since_h = self._engine.current_time
-        self._log_dispatch(vehicle.id, "release", "manual", "Released from facility")
-        return None
+        reason = f"manual release → {zone}"
+        return self.reposition_vehicle_to_point(
+            vehicle_id,
+            staging.lat,
+            staging.lon,
+            manual=True,
+            reason=reason,
+            from_off_street=True,
+        )
 
     def dispatch_vehicle(self, vehicle_id: str, trip_id: str) -> str | None:
         """Manually assign ``vehicle_id`` to serve ``trip_id``."""
@@ -342,12 +463,23 @@ class SimulationManager:
         node_id: str | None = None,
         manual: bool = True,
         reason: str = "",
+        from_off_street: bool = False,
     ) -> str | None:
-        """Send an idle vehicle to a map coordinate (snapped to the street network)."""
+        """Send a vehicle to a map coordinate (snapped to the street network)."""
         vehicle = self._state.vehicles.get(vehicle_id)
         if vehicle is None:
             return f"Unknown vehicle '{vehicle_id}'."
-        if vehicle.state != VehicleState.IDLE:
+        if from_off_street:
+            if vehicle.state not in OFF_STREET_STATES:
+                return f"Vehicle '{vehicle_id}' is not at a facility."
+        elif vehicle.state == VehicleState.REPOSITIONING and manual:
+            self._clear_leg(vehicle)
+            self._engine.cancel_events_for_entity(
+                vehicle.id,
+                event_type=EventType.VEHICLE_ARRIVE,
+            )
+            vehicle.state = VehicleState.IDLE
+        elif vehicle.state != VehicleState.IDLE:
             return f"Vehicle '{vehicle_id}' is not idle."
         snap_node_id, snap_point = self._router.snap_point(lat, lon)
         dest_node_id = node_id or snap_node_id
@@ -362,6 +494,7 @@ class SimulationManager:
             vehicle.lat = snap_point.lat
             vehicle.lon = snap_point.lon
             vehicle.idle_since_h = self._engine.current_time
+            vehicle.state = VehicleState.IDLE
             src = "manual" if manual else "auto"
             self._log_dispatch(
                 vehicle.id, "stage", src, reason or "Arrived at staging point",
@@ -408,6 +541,19 @@ class SimulationManager:
             events=events,
         )
         dispatch_candidates = self._dispatch_candidates_snapshot()
+        zone_balance_rows = [
+            {
+                "zone": row.zone,
+                "supply": row.supply,
+                "pending_demand": row.pending_demand,
+                "expected_demand": row.expected_demand,
+                "target_supply": row.target_supply,
+                "gap": row.gap,
+                "max_idle": row.max_idle,
+            }
+            for row in balances
+        ]
+        alerts = compute_operator_alerts(self._state.policy, kpis, zone_balance_rows)
         payload = {
             "type": "STATE_SNAPSHOT",
             "current_time_h": round(t, 5),
@@ -421,18 +567,8 @@ class SimulationManager:
             "supply_by_zone": supply,
             "demand_by_zone": demand,
             "expected_demand_by_zone": {k: round(v, 2) for k, v in expected.items()},
-            "zone_balance": [
-                {
-                    "zone": row.zone,
-                    "supply": row.supply,
-                    "pending_demand": row.pending_demand,
-                    "expected_demand": row.expected_demand,
-                    "target_supply": row.target_supply,
-                    "gap": row.gap,
-                    "max_idle": row.max_idle,
-                }
-                for row in balances
-            ],
+            "zone_balance": zone_balance_rows,
+            "operator_alerts": alerts,
             "zone_overlays": zone_overlay_snapshot(),
             "forecast_by_zone": forecast_snapshot(
                 self._demand,
@@ -463,6 +599,10 @@ class SimulationManager:
             "nodes": [],
             "map_bounds": self._map_bounds_snapshot(),
             "map_center": self._map_center_snapshot(),
+            "seed": self._seed,
+            "kpi_series": [s.model_dump() for s in self._state.kpi_series],
+            "experiment_runs": [r.model_dump() for r in self._ledger.list_runs()],
+            "operator_presets": self._presets.list_presets(),
         }
         return json.dumps(payload)
 
@@ -492,9 +632,27 @@ class SimulationManager:
         include_repositioning = True
         result: dict[str, list[dict[str, object]]] = {}
         pol = self._state.policy
+        supply, pending = self._zone_heatmaps()
+        zone_ctx = dispatch_zone_context_from_rows(
+            supply,
+            zone_balances(
+                self._router,
+                pol,
+                self._demand,
+                sim_time_h=self._engine.current_time,
+                supply_by_zone=supply,
+                pending_by_zone=pending,
+                events=self._state.special_events,
+            ),
+            pol,
+        )
+        dropoff_by_trip: dict[str, str] = {}
         for trip in self._state.trips.values():
             if trip.status != TripStatus.PENDING:
                 continue
+            from routing.zones import zone_for_point
+
+            dropoff_by_trip[trip.id] = zone_for_point(trip.destination.lat, trip.destination.lon)
             ranked = rank_dispatch_candidates(
                 trip,
                 self._state.vehicles,
@@ -502,13 +660,19 @@ class SimulationManager:
                 surge_multiplier=pol.surge_multiplier,
                 policy=pol,
                 include_repositioning=include_repositioning,
-                use_fast_eta=True,
+                use_fast_eta=pol.dispatch_use_fast_eta,
+                limit=pol.dispatch_candidate_limit,
+                zone_ctx=zone_ctx,
+                traffic_multiplier=pol.global_traffic_multiplier,
             )
             result[trip.id] = [
                 {
                     "vehicle_id": c.vehicle_id,
                     "eta_min": round(c.eta_min, 2),
+                    "score": round(c.score, 2),
                     "state": c.state.value,
+                    "dropoff_zone": c.dropoff_zone or dropoff_by_trip[trip.id],
+                    "balance_adjustment": round(c.balance_adjustment, 2),
                 }
                 for c in ranked
             ]
@@ -598,6 +762,7 @@ class SimulationManager:
     ) -> None:
         """Schedule a routed leg and store street geometry on the vehicle."""
         now = self._engine.current_time
+        travel_min = route.travel_time_min * self._state.policy.global_traffic_multiplier
         self._engine.cancel_events_for_entity(
             vehicle.id,
             event_type=EventType.VEHICLE_ARRIVE,
@@ -605,12 +770,12 @@ class SimulationManager:
         vehicle.active_route_edges = list(route.edge_ids)
         vehicle.active_route_geometry = list(route.geometry)
         vehicle.leg_started_at_h = now
-        vehicle.leg_ends_at_h = now + route.travel_time_min / MINUTES_PER_HOUR
+        vehicle.leg_ends_at_h = now + travel_min / MINUTES_PER_HOUR
         _, heading = self._router.position_on_leg(route, 0.0)
         vehicle.heading_deg = heading
         if track_deadhead:
             self._state.reposition_km += route.distance_km
-            self._state.reposition_min += route.travel_time_min
+            self._state.reposition_min += travel_min
         if track_revenue:
             self._state.revenue_km += route.distance_km
         apply_movement_wear(vehicle, route.distance_km, self._state.policy)
@@ -648,7 +813,7 @@ class SimulationManager:
                 dest_snap_id, _ = self._router.snap_point(dest.lat, dest.lon)
                 self._trip_counter += 1
                 tid = f"trip-{self._trip_counter:05d}"
-                fare = pol.base_fare * pol.surge_multiplier + route.travel_time_min * 0.15
+                fare = estimate_trip_fare(route.travel_time_min, route.distance_km, pol)
                 self._state.trips[tid] = TripRequest(
                     id=tid,
                     origin=origin,
@@ -691,10 +856,11 @@ class SimulationManager:
         dest_snap_id, _ = self._router.snap_point(dest.lat, dest.lon)
         route = self._router.route_between(origin.lat, origin.lon, dest.lat, dest.lon)
         travel = route.travel_time_min if route else 0.0
+        distance = route.distance_km if route else 0.0
         self._trip_counter += 1
         tid = f"trip-{self._trip_counter:05d}"
         pol = self._state.policy
-        fare = pol.base_fare * pol.surge_multiplier + travel * 0.15
+        fare = estimate_trip_fare(travel, distance, pol)
         self._state.trips[tid] = TripRequest(
             id=tid,
             origin=origin,
@@ -733,23 +899,61 @@ class SimulationManager:
                 (t for t in self._state.trips.values() if t.status == TripStatus.PENDING),
                 key=lambda t: t.requested_at_h,
             )
-            for trip in pending_trips:
-                decision = evaluator.evaluate_dispatch(
-                    ctx,
-                    trip,
+            include_repo = (
+                self._state.operator_setup.dispatch_assignment_mode
+                == DispatchAssignmentMode.CLOSEST_IDLE_OR_REPOSITIONING
+            )
+            if pol.batch_dispatch_enabled and pending_trips:
+                zone_ctx = dispatch_zone_context_from_rows(supply, ctx.zone_rows, pol)
+                pairs = batch_assign_trips(
+                    pending_trips,
                     self._state.vehicles,
-                    assigned_vehicle_ids=assigned,
+                    self._router,
+                    pol,
+                    include_repositioning=include_repo,
+                    zone_ctx=zone_ctx,
+                    traffic_multiplier=pol.global_traffic_multiplier,
                 )
-                if decision is None:
-                    continue
-                vehicle = self._state.vehicles.get(decision.vehicle_id)
-                if vehicle is None:
-                    continue
-                self._assign_trip(vehicle, trip)
-                assigned.add(decision.vehicle_id)
-                self._record_rule_hit(RuleEvaluator.hit_from_dispatch(decision, now))
+                for trip_id, vehicle_id in pairs:
+                    trip = self._state.trips.get(trip_id)
+                    vehicle = self._state.vehicles.get(vehicle_id)
+                    if trip is None or vehicle is None:
+                        continue
+                    self._assign_trip(vehicle, trip)
+                    assigned.add(vehicle_id)
+                    self._record_rule_hit(
+                        RoutingRuleHit(
+                            timestamp_h=now,
+                            rule_id="batch",
+                            rule_name="Batch dispatch",
+                            phase=RulePhase.DISPATCH,
+                            subject_id=trip_id,
+                            action=ActionType.ASSIGN_NEAREST_ELIGIBLE,
+                            detail=f"vehicle {vehicle_id}",
+                        ),
+                    )
+            else:
+                for trip in pending_trips:
+                    if not zone_dispatch_enabled(trip, pol):
+                        continue
+                    decision = evaluator.evaluate_dispatch(
+                        ctx,
+                        trip,
+                        self._state.vehicles,
+                        assigned_vehicle_ids=assigned,
+                    )
+                    if decision is None:
+                        continue
+                    vehicle = self._state.vehicles.get(decision.vehicle_id)
+                    if vehicle is None:
+                        continue
+                    self._assign_trip(vehicle, trip)
+                    assigned.add(decision.vehicle_id)
+                    self._record_rule_hit(RuleEvaluator.hit_from_dispatch(decision, now))
 
         self._staging_claims = set()
+        if not pol.auto_reposition_enabled:
+            return
         idle_vehicles = sorted(
             (v for v in self._state.vehicles.values() if v.state == VehicleState.IDLE),
             key=lambda v: v.idle_since_h,
@@ -762,6 +966,42 @@ class SimulationManager:
                 vehicle,
                 claimed=self._staging_claims,
             )
+            if decision is None and pol.deadzone_filler_enabled:
+                fill = pick_deadzone_fill_decision(
+                    vehicle,
+                    self._router,
+                    pol,
+                    self._state.vehicles,
+                    sim_time_h=now,
+                    claimed=self._staging_claims,
+                    rng=self._rng,
+                )
+                if fill is not None:
+                    self._record_rule_hit(
+                        RoutingRuleHit(
+                            timestamp_h=now,
+                            rule_id="deadzone",
+                            rule_name="Deadzone filler",
+                            phase=RulePhase.REPOSITION,
+                            subject_id=vehicle.id,
+                            action=ActionType.REPOSITION_TO_ZONE,
+                            detail=(
+                                f"{fill.zone} ratio {fill.fill_ratio:.2f} "
+                                f"(size {fill.deadzone_size_km:.1f}km / travel {fill.travel_km:.1f}km)"
+                            ),
+                        ),
+                    )
+                    self._staging_claims.add(
+                        (round(fill.staging.lat, 4), round(fill.staging.lon, 4)),
+                    )
+                    self.reposition_vehicle_to_point(
+                        vehicle.id,
+                        fill.staging.lat,
+                        fill.staging.lon,
+                        manual=False,
+                        reason=f"deadzone fill → {fill.zone} (ratio {fill.fill_ratio:.2f})",
+                    )
+                    continue
             if decision is None:
                 continue
             self._record_rule_hit(RuleEvaluator.hit_from_reposition(decision, now))
@@ -921,6 +1161,67 @@ class SimulationManager:
             apply_trip_complete_wear(vehicle, self._state.policy, self._rng)
             if not is_dispatch_eligible(vehicle, self._state.policy):
                 self._route_to_nearest_facility_for_health(vehicle)
+            elif self._state.policy.post_trip_reposition_enabled:
+                drop_zone = zone_for_point(trip.destination.lat, trip.destination.lon)
+                supply, pending = self._zone_heatmaps()
+                if should_post_trip_reposition(
+                    drop_zone,
+                    self._router,
+                    self._state.policy,
+                    self._demand,
+                    sim_time_h=event.timestamp,
+                    supply_by_zone=supply,
+                    pending_by_zone=pending,
+                ):
+                    self._reposition_vehicle_after_dropoff(vehicle, now=event.timestamp)
+
+    def _reposition_vehicle_after_dropoff(self, vehicle: Vehicle, *, now: float) -> None:
+        """Reposition a vehicle that just completed a trip in a saturated zone."""
+        if vehicle.state != VehicleState.IDLE or self._is_manual_hold(vehicle):
+            return
+        pol = self._state.policy
+        supply, pending = self._zone_heatmaps()
+        ctx = build_routing_context(
+            self._router,
+            pol,
+            self._demand,
+            sim_time_h=now,
+            supply_by_zone=supply,
+            pending_by_zone=pending,
+            events=self._state.special_events,
+            horizon_h=pol.reposition_lead_min / MINUTES_PER_HOUR,
+            rng=self._rng,
+        )
+        evaluator = RuleEvaluator(self._state.routing_rules)
+        decision = evaluator.evaluate_reposition(ctx, vehicle, claimed=set())
+        if decision is None or decision.action == ActionType.HOLD:
+            return
+        if decision.send_to_depot:
+            if pol.depot_release_enabled:
+                self._try_depot_pull(vehicle, reason="post-trip surplus")
+            return
+        self.reposition_vehicle_to_point(
+            vehicle.id,
+            decision.staging.lat,
+            decision.staging.lon,
+            manual=False,
+            reason="post-trip reposition",
+        )
+
+    def _check_dispatch_failover(self) -> None:
+        """Disable auto-dispatch when queue or wait KPIs exceed failover thresholds."""
+        pol = self._state.policy
+        if not pol.auto_dispatch_enabled:
+            return
+        kpis = self._compute_kpis()
+        triggered = False
+        if pol.failover_pending_queue_max > 0 and kpis["pending_trips"] >= pol.failover_pending_queue_max:
+            triggered = True
+        if pol.failover_avg_wait_max_min > 0 and kpis["avg_wait_min"] >= pol.failover_avg_wait_max_min:
+            triggered = True
+        if triggered:
+            self._state.policy = pol.model_copy(update={"auto_dispatch_enabled": False})
+            self._log_dispatch("system", "failover", "auto", "Auto-dispatch disabled — SLA threshold exceeded")
 
     def _try_depot_pull(self, vehicle: Vehicle, *, reason: str) -> bool:
         """Send surplus vehicle to nearest depot with capacity."""
@@ -949,9 +1250,16 @@ class SimulationManager:
             best_fac = fac
         if best_fac is None:
             return False
-        return self._route_to_facility(vehicle, best_fac, reason=reason) is None
+        return self._route_to_facility(vehicle, best_fac, manual=False, reason=reason) is None
 
-    def _route_to_facility(self, vehicle: Vehicle, fac: object, *, reason: str = "") -> str | None:
+    def _route_to_facility(
+        self,
+        vehicle: Vehicle,
+        fac: object,
+        *,
+        manual: bool = False,
+        reason: str = "",
+    ) -> str | None:
         from core_data.models import Facility
 
         if not isinstance(fac, Facility):
@@ -968,8 +1276,10 @@ class SimulationManager:
             payload={"facility_id": fac.id},
             track_deadhead=True,
         )
+        src = "manual" if manual else "auto"
+        log_reason = reason or f"Sent to {fac.name}"
         self._log_dispatch(
-            vehicle.id, "to_facility", "auto", reason or f"Sent to {fac.name}",
+            vehicle.id, "to_facility", src, log_reason,
             to_lat=fac.lat, to_lon=fac.lon,
         )
         return None
@@ -1017,7 +1327,7 @@ class SimulationManager:
             best_fac = fac
         if best_fac is None:
             return False
-        return self._route_to_facility(vehicle, best_fac, reason=alert) is None
+        return self._route_to_facility(vehicle, best_fac, manual=False, reason=alert) is None
 
     def _check_vehicle_health(self) -> None:
         """Auto-route unfit idle vehicles to charger, cleaning, or maintenance."""
@@ -1093,6 +1403,22 @@ class SimulationManager:
             1 for v in self._state.vehicles.values()
             if v.state == VehicleState.IDLE and not is_dispatch_eligible(v, self._state.policy)
         )
+        pol = self._state.policy
+        deadhead_cost = round(self._state.reposition_min * pol.deadhead_cost_per_min, 2)
+        profit = round(self._state.revenue - deadhead_cost, 2)
+        sim_hours = max(self._engine.current_time, 0.001)
+        vehicle_hours = fleet * sim_hours
+        trips_per_vehicle_hour = round(self._state.trips_completed / vehicle_hours, 3)
+        total_outcomes = self._state.trips_completed + self._state.trips_cancelled
+        completion_rate = (
+            round(self._state.trips_completed / total_outcomes, 3) if total_outcomes > 0 else 0.0
+        )
+        composite_score = self._compute_composite_score(
+            profit=profit,
+            avg_wait=avg_wait,
+            deadhead_ratio=deadhead,
+            completion_rate=completion_rate,
+        )
         return {
             "avg_wait_min": round(avg_wait, 2),
             "p95_wait_min": round(p95, 2),
@@ -1100,6 +1426,12 @@ class SimulationManager:
             "trips_completed": float(self._state.trips_completed),
             "trips_cancelled": float(self._state.trips_cancelled),
             "revenue": round(self._state.revenue, 2),
+            "deadhead_cost": deadhead_cost,
+            "profit": profit,
+            "completion_rate": completion_rate,
+            "trips_per_vehicle_hour": trips_per_vehicle_hour,
+            "sim_hours": round(sim_hours, 2),
+            "composite_score": composite_score,
             "pending_trips": float(pending),
             "deadhead_ratio": round(deadhead, 3),
             "vehicles_at_depot": float(at_depot),
@@ -1109,6 +1441,106 @@ class SimulationManager:
             "avg_cleanliness_pct": round(avg_cleanliness, 1),
             "vehicles_needing_service": float(needing_service),
         }
+
+    def _compute_composite_score(
+        self,
+        *,
+        profit: float,
+        avg_wait: float,
+        deadhead_ratio: float,
+        completion_rate: float,
+    ) -> float:
+        """Weighted operator objective (report-only; does not auto-tune policy)."""
+        pol = self._state.policy
+        score = (
+            pol.score_weight_profit * profit
+            - pol.score_weight_wait * avg_wait
+            - pol.score_weight_deadhead * deadhead_ratio * 100.0
+            + pol.score_weight_completion * completion_rate * 100.0
+        )
+        return round(score, 2)
+
+    def _maybe_sample_kpis(self) -> None:
+        """Append KPI sample every ``KPI_SAMPLE_INTERVAL_H`` sim hours."""
+        t = self._engine.current_time
+        last = self._state.last_kpi_sample_h
+        if last >= 0 and t - last < KPI_SAMPLE_INTERVAL_H:
+            return
+        kpis = self._compute_kpis()
+        sample = KpiSample(
+            sim_time_h=round(t, 3),
+            profit=kpis["profit"],
+            revenue=kpis["revenue"],
+            avg_wait_min=kpis["avg_wait_min"],
+            fleet_utilization_pct=kpis["fleet_utilization_pct"],
+            pending_trips=kpis["pending_trips"],
+            deadhead_ratio=kpis["deadhead_ratio"],
+            trips_completed=kpis["trips_completed"],
+        )
+        self._state.kpi_series.append(sample)
+        if len(self._state.kpi_series) > MAX_KPI_SERIES:
+            self._state.kpi_series = self._state.kpi_series[-MAX_KPI_SERIES:]
+        self._state.last_kpi_sample_h = t
+
+    def checkpoint_run(self, label: str) -> ExperimentRun:
+        """Save current KPIs and config as an experiment checkpoint."""
+        self._run_counter += 1
+        run = ExperimentRun(
+            id=f"run-{self._run_counter:04d}",
+            label=label,
+            seed=self._seed,
+            scenario=self._state.policy.scenario_preset.value,
+            city=self._city,
+            sim_time_h=round(self._engine.current_time, 3),
+            policy=self._state.policy.model_dump(mode="json"),
+            routing_rules=self._state.routing_rules.model_dump(mode="json"),
+            kpis=self._compute_kpis(),
+            created_at_iso=datetime.now(timezone.utc).isoformat(),
+        )
+        return self._ledger.save_run(run)
+
+    def list_experiment_runs(self) -> list[ExperimentRun]:
+        """Return saved experiment checkpoints."""
+        return self._ledger.list_runs()
+
+    def delete_experiment_run(self, run_id: str) -> str | None:
+        """Delete a saved experiment run."""
+        if not self._ledger.delete_run(run_id):
+            return f"Unknown run '{run_id}'."
+        return None
+
+    def save_operator_preset(self, name: str, description: str = "") -> str:
+        """Persist current policy + rules as a named preset."""
+        preset = OperatorPreset(
+            name=name,
+            description=description,
+            policy=self._state.policy.model_dump(mode="json"),
+            routing_rules=self._state.routing_rules.model_dump(mode="json"),
+            operator_setup=self._state.operator_setup.model_dump(mode="json"),
+        )
+        return self._presets.save(preset)
+
+    def list_operator_presets(self) -> list[str]:
+        """Return saved preset names."""
+        return self._presets.list_presets()
+
+    def load_operator_preset(self, name: str) -> str | None:
+        """Apply a saved preset to the live simulation."""
+        try:
+            preset = self._presets.load(name)
+        except FileNotFoundError:
+            return f"Preset '{name}' not found."
+        self._state.policy = NetworkPolicy.model_validate(preset.policy)
+        self._state.routing_rules = RoutingRuleSet.model_validate(preset.routing_rules)
+        self._state.operator_setup = OperatorSetup.model_validate(preset.operator_setup)
+        self._sync_demand_from_policy()
+        return None
+
+    def delete_operator_preset(self, name: str) -> str | None:
+        """Remove a saved preset."""
+        if not self._presets.delete(name):
+            return f"Preset '{name}' not found."
+        return None
 
     def _demand_by_zone(self) -> dict[str, int]:
         counts: dict[str, int] = {}

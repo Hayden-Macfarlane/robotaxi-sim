@@ -10,6 +10,7 @@ export const PLAYBACK_SPEED_OPTIONS = [
   { value: 10, label: '10×' },
   { value: 30, label: '30×' },
   { value: 60, label: '60×' },
+  { value: 120, label: '120×' },
 ] as const
 
 export const DEFAULT_PLAYBACK_SPEED = 1

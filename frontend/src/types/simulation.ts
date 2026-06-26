@@ -97,6 +97,52 @@ export interface NetworkPolicySnap {
   charge_minutes_to_full: number
   cleaning_service_min: number
   maintenance_service_min: number
+  base_trips_per_hour?: number
+  zone_demand_weights?: Record<string, number>
+  dispatch_candidate_limit?: number
+  dispatch_use_fast_eta?: boolean
+  dispatch_weight_eta?: number
+  dispatch_weight_surge?: number
+  dispatch_weight_zone_balance?: number
+  cross_zone_dispatch_penalty_min?: number
+  max_deadhead_to_pickup_min?: number
+  allow_preempt_reposition?: boolean
+  failover_pending_queue_max?: number
+  failover_avg_wait_max_min?: number
+  dispatch_tie_breaker?: 'closest' | 'idle_longest' | 'lowest_battery'
+  per_minute_fare?: number
+  per_mile_fare?: number
+  forecast_rising_threshold?: number
+  charge_aware_dispatch?: boolean
+  min_battery_pct_for_trip?: number
+  km_per_soc_pct?: number
+  alert_avg_wait_min?: number
+  alert_pending_queue?: number
+  alert_utilization_below_pct?: number
+  alert_vehicles_needing_service?: number
+  alert_zone_deficit?: number
+  global_traffic_multiplier?: number
+  scenario_preset?: string
+  batch_dispatch_enabled?: boolean
+  auto_dispatch_by_zone?: Record<string, boolean>
+  score_weight_profit?: number
+  score_weight_wait?: number
+  score_weight_deadhead?: number
+  score_weight_completion?: number
+  dispatch_consider_dropoff_balance?: boolean
+  dispatch_weight_dropoff_balance?: number
+  dispatch_penalty_dropoff_surplus_min?: number
+  deadzone_filler_enabled?: boolean
+  max_distance_from_nearest_asset_km?: number
+  deadzone_fill_ratio_threshold?: number
+  deadzone_size_adjustment_km?: number
+  deadzone_travel_adjustment_km?: number
+}
+
+export interface OperatorAlertSnap {
+  level: string
+  code: string
+  message: string
 }
 
 export interface ZoneBalanceSnap {
@@ -157,6 +203,12 @@ export interface KpiSnap {
   trips_completed: number
   trips_cancelled: number
   revenue: number
+  deadhead_cost?: number
+  profit?: number
+  completion_rate?: number
+  trips_per_vehicle_hour?: number
+  sim_hours?: number
+  composite_score?: number
   pending_trips: number
   deadhead_ratio: number
   vehicles_at_depot: number
@@ -167,6 +219,30 @@ export interface KpiSnap {
   vehicles_needing_service?: number
 }
 
+export interface KpiSampleSnap {
+  sim_time_h: number
+  profit: number
+  revenue: number
+  avg_wait_min: number
+  fleet_utilization_pct: number
+  pending_trips: number
+  deadhead_ratio: number
+  trips_completed: number
+}
+
+export interface ExperimentRunSnap {
+  id: string
+  label: string
+  seed: number
+  scenario: string
+  city: string
+  sim_time_h: number
+  policy: Record<string, unknown>
+  routing_rules: Record<string, unknown>
+  kpis: KpiSnap
+  created_at_iso: string
+}
+
 export type DispatchAssignmentMode =
   | 'manual'
   | 'closest_idle_or_repositioning'
@@ -175,7 +251,10 @@ export type DispatchAssignmentMode =
 export interface DispatchCandidateSnap {
   vehicle_id: string
   eta_min: number
+  score?: number
   state: VehicleState
+  dropoff_zone?: string
+  balance_adjustment?: number
 }
 
 export interface OperatorSetupSnap {
@@ -209,12 +288,17 @@ export interface SimulationSnapshot {
   routing_rules?: import('./routing').RoutingRuleSet
   routing_rule_hits?: import('./routing').RoutingRuleHit[]
   operator_setup?: OperatorSetupSnap
+  operator_alerts?: OperatorAlertSnap[]
   dispatch_candidates?: Record<string, DispatchCandidateSnap[]>
   vehicles: VehicleSnap[]
   trips: TripSnap[]
   riders: RiderSnap[]
   streets: [number, number][][]
   nodes: RoadNodeSnap[]
+  seed?: number
+  kpi_series?: KpiSampleSnap[]
+  experiment_runs?: ExperimentRunSnap[]
+  operator_presets?: string[]
 }
 
 export type SimCommand =
@@ -231,5 +315,14 @@ export type SimCommand =
   | { type: 'REPOSITION_VEHICLE'; vehicle_id: string; node_id?: string; lat?: number; lon?: number }
   | { type: 'STAGE_VEHICLES'; vehicle_ids: string[]; lat: number; lon: number }
   | { type: 'CREATE_SPECIAL_EVENT'; label: string; zone: string; start_h: number; end_h: number; demand_multiplier?: number }
+  | { type: 'DELETE_SPECIAL_EVENT'; event_id: string }
+  | { type: 'UPDATE_SPECIAL_EVENT'; event_id: string; label?: string; zone?: string; start_h?: number; end_h?: number; demand_multiplier?: number }
+  | { type: 'CANCEL_TRIP'; trip_id: string }
+  | { type: 'APPLY_SCENARIO'; preset: string }
+  | { type: 'CHECKPOINT_RUN'; label: string }
+  | { type: 'DELETE_EXPERIMENT_RUN'; run_id: string }
+  | { type: 'SAVE_OPERATOR_PRESET'; name: string; description?: string }
+  | { type: 'LOAD_OPERATOR_PRESET'; name: string }
+  | { type: 'DELETE_OPERATOR_PRESET'; name: string }
   | { type: 'SEND_TO_FACILITY'; vehicle_id: string; facility_id: string }
-  | { type: 'RELEASE_FROM_FACILITY'; vehicle_id: string }
+  | { type: 'RELEASE_FROM_FACILITY'; vehicle_id: string; zone: string }

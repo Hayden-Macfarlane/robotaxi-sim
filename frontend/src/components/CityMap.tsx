@@ -1,7 +1,9 @@
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Marker, Polygon, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import type { FacilitySnap, SimCommand, SimulationSnapshot, VehicleSnap, ZoneBalanceSnap, ZoneOverlaySnap } from '../types/simulation'
+
+const OFF_STREET = new Set(['at_depot', 'charging', 'maintenance', 'cleaning'])
 
 const STATE_COLOR: Record<string, string> = {
   idle: '#22d3ee',
@@ -28,12 +30,20 @@ function formatCoord(lat: number, lon: number): string {
   return `${lat.toFixed(4)}, ${lon.toFixed(4)}`
 }
 
-function vehicleIcon(v: VehicleSnap, draggable: boolean, highlighted: boolean) {
+function vehicleIcon(v: VehicleSnap, draggable: boolean, highlighted: boolean, atFacility: boolean) {
   const color = STATE_COLOR[v.state] ?? '#fff'
   const heading = v.heading_deg ?? 0
   const ring = highlighted
     ? 'box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.9), 0 0 8px rgba(56, 189, 248, 0.6); border-radius: 50%;'
     : ''
+  if (atFacility) {
+    return L.divIcon({
+      className: '',
+      html: `<div style="${ring} width:10px;height:10px;border-radius:2px;background:${color};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.5);cursor:pointer;"></div>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5],
+    })
+  }
   return L.divIcon({
     className: '',
     html: `<div style="${ring} display:inline-block;">
@@ -45,7 +55,7 @@ function vehicleIcon(v: VehicleSnap, draggable: boolean, highlighted: boolean) {
         transform: rotate(${heading}deg);
         transform-origin: center 70%;
         filter: drop-shadow(0 1px 2px rgba(0,0,0,0.45));
-        ${draggable ? 'cursor: grab;' : ''}
+        ${draggable ? 'cursor: grab;' : 'cursor: pointer;'}
       "></div>
     </div>`,
     iconSize: [14, 14],
@@ -76,16 +86,23 @@ function zoneStatusColor(row: ZoneBalanceSnap): string {
   return '#64748b'
 }
 
+function StagingModeHandler({ stagingActive }: { stagingActive: boolean }) {
+  const map = useMap()
+  useEffect(() => {
+    if (stagingActive) map.closePopup()
+  }, [map, stagingActive])
+  return null
+}
+
 interface MapClickProps {
-  stagingVehicleId: string | null
-  selectedVehicleIds: string[]
+  stagingActive: boolean
   onStage: (lat: number, lon: number) => void
 }
 
-function MapClickHandler({ stagingVehicleId, selectedVehicleIds, onStage }: MapClickProps) {
+function MapClickHandler({ stagingActive, onStage }: MapClickProps) {
   useMapEvents({
     click(e) {
-      if (!stagingVehicleId && selectedVehicleIds.length === 0) return
+      if (!stagingActive) return
       onStage(e.latlng.lat, e.latlng.lng)
     },
   })
@@ -104,27 +121,49 @@ function MapPanHandler({ panTo }: MapPanProps) {
   return null
 }
 
-interface DraggableVehicleProps {
+interface VehicleMarkerProps {
   vehicle: VehicleSnap
   draggable: boolean
   highlighted: boolean
+  atFacility: boolean
+  onSelect: (vehicleId: string) => void
   onDragEnd: (vehicleId: string, lat: number, lon: number) => void
 }
 
-function DraggableVehicleMarker({ vehicle, draggable, highlighted, onDragEnd }: DraggableVehicleProps) {
+function VehicleMarker({ vehicle, draggable, highlighted, atFacility, onSelect, onDragEnd }: VehicleMarkerProps) {
   const markerRef = useRef<L.Marker>(null)
+  const draggingRef = useRef(false)
+  const [position, setPosition] = useState<[number, number]>(() => [vehicle.lat, vehicle.lon])
+
+  useEffect(() => {
+    if (draggingRef.current) return
+    setPosition([vehicle.lat, vehicle.lon])
+  }, [vehicle.lat, vehicle.lon])
+
   return (
     <Marker
       ref={markerRef}
-      position={[vehicle.lat, vehicle.lon]}
-      icon={vehicleIcon(vehicle, draggable, highlighted)}
+      position={position}
+      icon={vehicleIcon(vehicle, draggable, highlighted, atFacility)}
       draggable={draggable}
+      autoPan
+      autoPanSpeed={20}
+      autoPanPadding={[80, 80]}
       zIndexOffset={highlighted ? 1000 : 0}
       eventHandlers={{
+        click: e => {
+          L.DomEvent.stopPropagation(e)
+          onSelect(vehicle.id)
+        },
+        dragstart: () => {
+          draggingRef.current = true
+        },
         dragend: () => {
+          draggingRef.current = false
           const m = markerRef.current
           if (!m) return
           const pos = m.getLatLng()
+          setPosition([pos.lat, pos.lng])
           onDragEnd(vehicle.id, pos.lat, pos.lng)
         },
       }}
@@ -137,10 +176,6 @@ function DraggableVehicleMarker({ vehicle, draggable, highlighted, onDragEnd }: 
           <>
             <br />
             <span className="text-xs">Battery {vehicle.battery_pct.toFixed(0)}%</span>
-            <br />
-            <span className="text-xs">Condition {(vehicle.condition_pct ?? 100).toFixed(0)}%</span>
-            <br />
-            <span className="text-xs">Clean {(vehicle.cleanliness_pct ?? 100).toFixed(0)}%</span>
           </>
         )}
         <br />
@@ -160,6 +195,8 @@ interface Props {
   panTo?: { lat: number; lon: number } | null
   onCommand: (cmd: SimCommand) => void
   onClearStaging: () => void
+  onSelectVehicle: (vehicleId: string | null) => void
+  onRequestRelease: (vehicleId: string) => void
 }
 
 function mapCenter(snapshot: SimulationSnapshot): [number, number] | null {
@@ -189,6 +226,8 @@ export function CityMap({
   panTo = null,
   onCommand,
   onClearStaging,
+  onSelectVehicle,
+  onRequestRelease,
 }: Props) {
   const zoneRows: ZoneBalanceSnap[] = snapshot.zone_balance ?? []
   const zoneOverlays: ZoneOverlaySnap[] = snapshot.zone_overlays ?? []
@@ -199,6 +238,17 @@ export function CityMap({
   }, [zoneRows])
   const facilities: FacilitySnap[] = snapshot.facilities ?? []
   const center = mapCenter(snapshot)
+
+  const vehiclesByFacility = useMemo(() => {
+    const out: Record<string, VehicleSnap[]> = {}
+    for (const v of snapshot.vehicles) {
+      if (v.facility_id && OFF_STREET.has(v.state)) {
+        out[v.facility_id] = out[v.facility_id] ?? []
+        out[v.facility_id].push(v)
+      }
+    }
+    return out
+  }, [snapshot.vehicles])
 
   if (!center) {
     const message = connecting
@@ -215,6 +265,15 @@ export function CityMap({
     )
   }
 
+  const handleSelect = (vehicleId: string) => {
+    const v = snapshot.vehicles.find(x => x.id === vehicleId)
+    if (!v) return
+    if (OFF_STREET.has(v.state)) return
+    if (v.state === 'idle' || v.state === 'repositioning') {
+      onSelectVehicle(stagingVehicleId === vehicleId ? null : vehicleId)
+    }
+  }
+
   const handleStage = (lat: number, lon: number) => {
     if (selectedVehicleIds.length > 0) {
       onCommand({ type: 'STAGE_VEHICLES', vehicle_ids: selectedVehicleIds, lat, lon })
@@ -228,13 +287,16 @@ export function CityMap({
 
   const handleDragEnd = (vehicleId: string, lat: number, lon: number) => {
     onCommand({ type: 'REPOSITION_VEHICLE', vehicle_id: vehicleId, lat, lon })
+    onClearStaging()
   }
+
+  const stagingActive = Boolean(stagingVehicleId) || selectedVehicleIds.length > 0
 
   const streetLines = (snapshot.streets ?? []).map((line, i) => (
     <Polyline
       key={`street-${i}`}
       positions={line as [number, number][]}
-      pathOptions={{ color: '#64748b', weight: 1.5, opacity: 0.35 }}
+      pathOptions={{ color: '#64748b', weight: 1.5, opacity: 0.35, interactive: false }}
     />
   ))
 
@@ -246,6 +308,16 @@ export function CityMap({
       <Polygon
         key={`zone-${overlay.zone}-${ringIdx}`}
         positions={ring as [number, number][]}
+        eventHandlers={
+          stagingActive
+            ? {
+                click: e => {
+                  L.DomEvent.stopPropagation(e)
+                  handleStage(e.latlng.lat, e.latlng.lng)
+                },
+              }
+            : undefined
+        }
         pathOptions={{
           color: borderColor,
           fillColor: overlay.color,
@@ -254,10 +326,10 @@ export function CityMap({
           opacity: 0.75,
         }}
       >
-        {ringIdx === 0 && (
+        {!stagingActive && ringIdx === 0 && (
           <Popup>
             <span className="font-medium capitalize">{overlay.zone.replace(/_/g, ' ')}</span>
-            {row ? (
+            {row && (
               <>
                 <br />
                 Idle: {row.supply}/{row.max_idle} · Min target: {row.target_supply}
@@ -266,11 +338,6 @@ export function CityMap({
                 <br />
                 Gap: {row.gap.toFixed(1)}
               </>
-            ) : (
-              <>
-                <br />
-                <span className="text-xs text-text-secondary capitalize">{overlay.kind} zone</span>
-              </>
             )}
           </Popup>
         )}
@@ -278,31 +345,59 @@ export function CityMap({
     ))
   })
 
-  const facilityMarkers = facilities.map(f => (
-    <Marker key={f.id} position={[f.lat, f.lon]} icon={facilityIcon(f.kind)}>
-      <Popup>
-        <span className="font-medium">{f.name || f.id}</span>
-        <br />
-        <span className="capitalize">{f.kind}</span> · cap {f.capacity}
-      </Popup>
-    </Marker>
-  ))
+  const facilityMarkers = facilities.map(f => {
+    const parked = vehiclesByFacility[f.id] ?? []
+    return (
+      <Marker key={f.id} position={[f.lat, f.lon]} icon={facilityIcon(f.kind)}>
+        <Popup>
+          <span className="font-medium">{f.name || f.id}</span>
+          <br />
+          <span className="capitalize">{f.kind}</span> · cap {f.capacity} · parked {parked.length}
+          {stagingVehicleId && (
+            <div className="mt-2">
+              <button
+                type="button"
+                className="text-xs text-accent hover:underline"
+                onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: stagingVehicleId, facility_id: f.id })}
+              >
+                Send {stagingVehicleId} here
+              </button>
+            </div>
+          )}
+          {parked.map(v => (
+            <div key={v.id} className="mt-1 flex items-center gap-2">
+              <span className="font-mono text-xs">{v.id}</span>
+              <button
+                type="button"
+                className="text-[10px] text-emerald-400 hover:underline"
+                onClick={() => onRequestRelease(v.id)}
+              >
+                Return to street
+              </button>
+            </div>
+          ))}
+        </Popup>
+      </Marker>
+    )
+  })
 
-  const vehicleMarkers = snapshot.vehicles
-    .filter(v => !['at_depot', 'charging', 'maintenance', 'cleaning'].includes(v.state))
-    .map(v => {
-      const draggable = v.state === 'idle' && (stagingVehicleId === v.id || selectedVehicleIds.includes(v.id))
-      const highlighted = highlightVehicleId === v.id || stagingVehicleId === v.id || selectedVehicleIds.includes(v.id)
-      return (
-        <DraggableVehicleMarker
-          key={v.id}
-          vehicle={v}
-          draggable={draggable}
-          highlighted={highlighted}
-          onDragEnd={handleDragEnd}
-        />
-      )
-    })
+  const vehicleMarkers = snapshot.vehicles.map(v => {
+    const atFacility = OFF_STREET.has(v.state)
+    const isSelected = stagingVehicleId === v.id || selectedVehicleIds.includes(v.id)
+    const draggable = !atFacility && (v.state === 'idle' || v.state === 'repositioning') && isSelected
+    const highlighted = highlightVehicleId === v.id || isSelected
+    return (
+      <VehicleMarker
+        key={v.id}
+        vehicle={v}
+        draggable={draggable}
+        highlighted={highlighted}
+        atFacility={atFacility}
+        onSelect={handleSelect}
+        onDragEnd={handleDragEnd}
+      />
+    )
+  })
 
   const routePolylines = snapshot.vehicles
     .filter(v => v.route_polyline && v.route_polyline.length >= 2)
@@ -314,6 +409,7 @@ export function CityMap({
           color: STATE_COLOR[v.state] ?? '#94a3b8',
           weight: 4,
           opacity: 0.85,
+          interactive: false,
         }}
       />
     ))
@@ -323,28 +419,29 @@ export function CityMap({
       key={`rider-${r.id}`}
       center={[r.lat, r.lon]}
       radius={7}
+      interactive={!stagingActive}
       pathOptions={{ color: '#ec4899', fillColor: '#f472b6', fillOpacity: 0.9, weight: 2 }}
     >
-      <Popup>
-        <span className="font-mono">{r.id}</span>
-        <br />
-        <span className="text-emerald-400">${r.fare_estimate.toFixed(2)}</span>
-      </Popup>
+      {!stagingActive && (
+        <Popup>
+          <span className="font-mono">{r.id}</span>
+          <br />
+          <span className="text-emerald-400">${r.fare_estimate.toFixed(2)}</span>
+        </Popup>
+      )}
     </CircleMarker>
   ))
 
-  const stagingActive = stagingVehicleId || selectedVehicleIds.length > 0
-
   return (
     <div className="relative h-full w-full">
-      {stagingActive && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] px-4 py-2 bg-accent/90 text-white text-sm rounded-lg shadow-lg">
-          {selectedVehicleIds.length > 0
-            ? `Staging ${selectedVehicleIds.length} vehicles — click map`
-            : `Override: drag or click to stage ${stagingVehicleId}`}
-        </div>
-      )}
-      <MapContainer center={center} zoom={12} className="h-full w-full" zoomControl={false}>
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] px-4 py-2 bg-surface-raised/95 border border-border-default text-text-secondary text-xs rounded-lg shadow-lg max-w-md text-center">
+        {stagingActive
+          ? selectedVehicleIds.length > 0
+            ? `${selectedVehicleIds.length} selected — click map to stage`
+            : `${stagingVehicleId} selected — click map to stage (or drag)`
+          : 'Select a vehicle in Fleet or on the map, then click destination'}
+      </div>
+      <MapContainer center={center} zoom={12} className={`h-full w-full ${stagingActive ? '[&_.leaflet-container]:cursor-crosshair' : ''}`} zoomControl={false}>
         <TileLayer
           attribution='&copy; CARTO &copy; OpenStreetMap'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -355,11 +452,8 @@ export function CityMap({
         {riderMarkers}
         {facilityMarkers}
         {vehicleMarkers}
-        <MapClickHandler
-          stagingVehicleId={stagingVehicleId}
-          selectedVehicleIds={selectedVehicleIds}
-          onStage={handleStage}
-        />
+        <StagingModeHandler stagingActive={stagingActive} />
+        <MapClickHandler stagingActive={stagingActive} onStage={handleStage} />
         <MapPanHandler panTo={panTo} />
       </MapContainer>
 

@@ -49,7 +49,7 @@ frontend/  →  WebSocket  →  api/server.py  →  simulation_loop/manager.py
 
 ## WebSocket commands
 
-`PLAY` · `PAUSE` · `STEP` · `RESET_SIMULATION` · `SET_NETWORK_POLICY` · `DISPATCH_VEHICLE` · `REPOSITION_VEHICLE` · `STAGE_VEHICLES` · `CREATE_SPECIAL_EVENT` · `SEND_TO_FACILITY` · `RELEASE_FROM_FACILITY`
+`PLAY` · `PAUSE` · `STEP` · `RESET_SIMULATION` · `SET_NETWORK_POLICY` · `DISPATCH_VEHICLE` · `REPOSITION_VEHICLE` · `STAGE_VEHICLES` · `CREATE_SPECIAL_EVENT` · `SEND_TO_FACILITY` · `RELEASE_FROM_FACILITY` (requires `zone` — routes out to a staging point)
 
 Fleet ops include forecast-based peak staging, per-zone supply caps, deadhead ROI gates, dispatcher override, special events, depot release valves, and **vehicle health** (battery/condition/cleanliness wear with timed recovery at facilities).
 

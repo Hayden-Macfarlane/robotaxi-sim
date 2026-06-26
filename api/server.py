@@ -265,6 +265,41 @@ def _handle_command(raw: str) -> dict[str, str] | None:
             "charge_minutes_to_full",
             "cleaning_service_min",
             "maintenance_service_min",
+            "base_trips_per_hour",
+            "zone_demand_weights",
+            "dispatch_candidate_limit",
+            "dispatch_use_fast_eta",
+            "dispatch_weight_eta",
+            "dispatch_weight_surge",
+            "dispatch_weight_zone_balance",
+            "cross_zone_dispatch_penalty_min",
+            "max_deadhead_to_pickup_min",
+            "allow_preempt_reposition",
+            "failover_pending_queue_max",
+            "failover_avg_wait_max_min",
+            "dispatch_tie_breaker",
+            "per_minute_fare",
+            "per_mile_fare",
+            "forecast_rising_threshold",
+            "charge_aware_dispatch",
+            "min_battery_pct_for_trip",
+            "km_per_soc_pct",
+            "alert_avg_wait_min",
+            "alert_pending_queue",
+            "alert_utilization_below_pct",
+            "alert_vehicles_needing_service",
+            "alert_zone_deficit",
+            "global_traffic_multiplier",
+            "scenario_preset",
+            "batch_dispatch_enabled",
+            "auto_dispatch_by_zone",
+            "score_weight_profit",
+            "score_weight_wait",
+            "score_weight_deadhead",
+            "score_weight_completion",
+            "dispatch_consider_dropoff_balance",
+            "dispatch_weight_dropoff_balance",
+            "dispatch_penalty_dropoff_surplus_min",
         ):
             if key in cmd and cmd[key] is not None:
                 patch[key] = cmd[key]
@@ -353,12 +388,96 @@ def _handle_command(raw: str) -> dict[str, str] | None:
             demand_multiplier=mult,
         )
 
+    elif cmd_type == "CANCEL_TRIP":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        tid = str(cmd.get("trip_id", ""))
+        err = _manager.cancel_trip(tid)
+        if err:
+            return _system_alert(err)
+
+    elif cmd_type == "DELETE_SPECIAL_EVENT":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        eid = str(cmd.get("event_id", ""))
+        err = _manager.delete_special_event(eid)
+        if err:
+            return _system_alert(err)
+
+    elif cmd_type == "UPDATE_SPECIAL_EVENT":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        eid = str(cmd.get("event_id", ""))
+        err = _manager.update_special_event(
+            eid,
+            label=str(cmd["label"]) if "label" in cmd else None,
+            zone=str(cmd["zone"]) if "zone" in cmd else None,
+            start_h=float(cmd["start_h"]) if "start_h" in cmd else None,
+            end_h=float(cmd["end_h"]) if "end_h" in cmd else None,
+            demand_multiplier=float(cmd["demand_multiplier"]) if "demand_multiplier" in cmd else None,
+        )
+        if err:
+            return _system_alert(err)
+
+    elif cmd_type == "APPLY_SCENARIO":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        from core_data.models import ScenarioPreset
+
+        preset_raw = str(cmd.get("preset", "custom"))
+        try:
+            preset = ScenarioPreset(preset_raw)
+        except ValueError:
+            return _system_alert(f"Unknown scenario preset: {preset_raw}")
+        _manager.apply_scenario(preset)
+
+    elif cmd_type == "CHECKPOINT_RUN":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        label = str(cmd.get("label", "Checkpoint"))
+        _manager.checkpoint_run(label)
+
+    elif cmd_type == "DELETE_EXPERIMENT_RUN":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        run_id = str(cmd.get("run_id", ""))
+        err = _manager.delete_experiment_run(run_id)
+        if err:
+            return _system_alert(err)
+
+    elif cmd_type == "SAVE_OPERATOR_PRESET":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        name = str(cmd.get("name", "")).strip()
+        if not name:
+            return _system_alert("SAVE_OPERATOR_PRESET requires name.")
+        desc = str(cmd.get("description", ""))
+        _manager.save_operator_preset(name, desc)
+
+    elif cmd_type == "LOAD_OPERATOR_PRESET":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        name = str(cmd.get("name", "")).strip()
+        if not name:
+            return _system_alert("LOAD_OPERATOR_PRESET requires name.")
+        err = _manager.load_operator_preset(name)
+        if err:
+            return _system_alert(err)
+
+    elif cmd_type == "DELETE_OPERATOR_PRESET":
+        if _manager is None:
+            return _system_alert("Simulation not initialized.")
+        name = str(cmd.get("name", "")).strip()
+        err = _manager.delete_operator_preset(name)
+        if err:
+            return _system_alert(err)
+
     elif cmd_type == "SEND_TO_FACILITY":
         if _manager is None:
             return _system_alert("Simulation not initialized.")
         vid = str(cmd.get("vehicle_id", ""))
         fid = str(cmd.get("facility_id", ""))
-        err = _manager.send_to_facility(vid, fid)
+        err = _manager.send_to_facility(vid, fid, manual=True)
         if err:
             return _system_alert(err)
 
@@ -366,7 +485,10 @@ def _handle_command(raw: str) -> dict[str, str] | None:
         if _manager is None:
             return _system_alert("Simulation not initialized.")
         vid = str(cmd.get("vehicle_id", ""))
-        err = _manager.release_from_facility(vid)
+        zone = str(cmd.get("zone", "")).strip()
+        if not zone:
+            return _system_alert("RELEASE_FROM_FACILITY requires zone.")
+        err = _manager.release_from_facility(vid, zone)
         if err:
             return _system_alert(err)
 

@@ -178,6 +178,25 @@ class OperatorSetup(BaseModel):
     advanced_automation_enabled: bool = False
 
 
+class DispatchTieBreaker(StrEnum):
+    """Tie-break strategy when dispatch ETAs are equal."""
+
+    CLOSEST = "closest"
+    IDLE_LONGEST = "idle_longest"
+    LOWEST_BATTERY = "lowest_battery"
+
+
+class ScenarioPreset(StrEnum):
+    """Named operator scenario presets."""
+
+    CUSTOM = "custom"
+    RUSH_HOUR = "rush_hour"
+    LOW_DEMAND = "low_demand"
+    CONCERT_SURGE = "concert_surge"
+    MAINTENANCE_HEAVY = "maintenance_heavy"
+    AIRPORT_PEAK = "airport_peak"
+
+
 class NetworkPolicy(BaseModel):
     """Manager-controlled network and pricing levers."""
 
@@ -214,9 +233,97 @@ class NetworkPolicy(BaseModel):
     charge_minutes_to_full: float = Field(default=45.0, ge=1.0)
     cleaning_service_min: float = Field(default=20.0, ge=1.0)
     maintenance_service_min: float = Field(default=30.0, ge=1.0)
+    # Demand tuning
+    base_trips_per_hour: float = Field(default=24.0, ge=0.0, le=500.0)
+    zone_demand_weights: dict[str, float] = Field(default_factory=dict)
+    # Dispatch scoring & limits
+    dispatch_candidate_limit: int = Field(default=5, ge=1, le=25)
+    dispatch_use_fast_eta: bool = False
+    dispatch_weight_eta: float = Field(default=1.0, ge=0.0)
+    dispatch_weight_surge: float = Field(default=0.0, ge=0.0)
+    dispatch_weight_zone_balance: float = Field(default=0.0, ge=0.0)
+    dispatch_consider_dropoff_balance: bool = False
+    dispatch_weight_dropoff_balance: float = Field(default=0.0, ge=0.0)
+    dispatch_penalty_dropoff_surplus_min: float = Field(default=0.0, ge=0.0)
+    cross_zone_dispatch_penalty_min: float = Field(default=0.0, ge=0.0)
+    max_deadhead_to_pickup_min: float = Field(default=0.0, ge=0.0)
+    allow_preempt_reposition: bool = True
+    failover_pending_queue_max: int = Field(default=0, ge=0)
+    failover_avg_wait_max_min: float = Field(default=0.0, ge=0.0)
+    dispatch_tie_breaker: DispatchTieBreaker = DispatchTieBreaker.CLOSEST
+    # Pricing
+    per_minute_fare: float = Field(default=0.15, ge=0.0)
+    per_mile_fare: float = Field(default=0.0, ge=0.0)
+    # Reposition thresholds
+    forecast_rising_threshold: float = Field(default=1.5, ge=0.0)
+    # Charge-aware dispatch
+    charge_aware_dispatch: bool = False
+    min_battery_pct_for_trip: float = Field(default=25.0, ge=5.0, le=90.0)
+    km_per_soc_pct: float = Field(default=0.6, gt=0.0)
+    # Operator alerts (0 = disabled for utilization)
+    alert_avg_wait_min: float = Field(default=8.0, ge=0.0)
+    alert_pending_queue: int = Field(default=10, ge=0)
+    alert_utilization_below_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    alert_vehicles_needing_service: int = Field(default=5, ge=0)
+    alert_zone_deficit: int = Field(default=3, ge=0)
+    # Network / traffic
+    global_traffic_multiplier: float = Field(default=1.0, gt=0.0, le=3.0)
+    scenario_preset: ScenarioPreset = ScenarioPreset.CUSTOM
+    # Routing efficiency (Phase 5)
+    batch_dispatch_enabled: bool = False
+    auto_dispatch_by_zone: dict[str, bool] = Field(default_factory=dict)
+    # Composite score weights (operator sets; sim reports only)
+    score_weight_profit: float = Field(default=1.0, ge=0.0)
+    score_weight_wait: float = Field(default=0.0, ge=0.0)
+    score_weight_deadhead: float = Field(default=0.0, ge=0.0)
+    score_weight_completion: float = Field(default=0.0, ge=0.0)
+    # Deadzone coverage filler (distance from nearest idle asset)
+    deadzone_filler_enabled: bool = False
+    max_distance_from_nearest_asset_km: float = Field(default=2.0, ge=0.1, le=50.0)
+    deadzone_fill_ratio_threshold: float = Field(default=1.0, ge=0.0, le=20.0)
+    deadzone_size_adjustment_km: float = Field(default=0.0, ge=0.0, le=20.0)
+    deadzone_travel_adjustment_km: float = Field(default=0.0, ge=0.0, le=20.0)
 
     @field_validator("fleet_size")
     @classmethod
     def _fleet_positive(cls, v: int) -> int:
         """Ensure at least one vehicle can operate."""
         return max(1, v)
+
+
+class KpiSample(BaseModel):
+    """Point-in-time KPI snapshot for time-series charts."""
+
+    sim_time_h: float = Field(..., ge=0.0)
+    profit: float = 0.0
+    revenue: float = 0.0
+    avg_wait_min: float = 0.0
+    fleet_utilization_pct: float = 0.0
+    pending_trips: float = 0.0
+    deadhead_ratio: float = 0.0
+    trips_completed: float = 0.0
+
+
+class ExperimentRun(BaseModel):
+    """Saved experiment checkpoint for before/after comparison."""
+
+    id: str
+    label: str
+    seed: int = 42
+    scenario: str = "custom"
+    city: str = "austin"
+    sim_time_h: float = 0.0
+    policy: dict[str, object] = Field(default_factory=dict)
+    routing_rules: dict[str, object] = Field(default_factory=dict)
+    kpis: dict[str, float] = Field(default_factory=dict)
+    created_at_iso: str = ""
+
+
+class OperatorPreset(BaseModel):
+    """Named bundle of policy + routing rules for reproducible experiments."""
+
+    name: str
+    description: str = ""
+    policy: dict[str, object] = Field(default_factory=dict)
+    routing_rules: dict[str, object] = Field(default_factory=dict)
+    operator_setup: dict[str, object] = Field(default_factory=dict)

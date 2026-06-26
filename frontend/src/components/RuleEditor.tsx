@@ -7,11 +7,12 @@ import type {
   RoutingRule,
 } from '../types/routing'
 import {
-  ACTION_LABELS,
   COMPARE_LABELS,
-  CONDITION_LABELS,
+  actionLabel,
+  conditionLabel,
   ZONES,
 } from '../types/routing'
+import { useUiMode } from '../contexts/UiModeContext'
 
 interface Props {
   rule: RoutingRule
@@ -30,7 +31,12 @@ const CONDITION_TYPES: ConditionType[] = [
   'time_of_day',
 ]
 
-const DISPATCH_ACTIONS: ActionType[] = ['assign_nearest_eligible', 'assign_prefer_zone', 'hold']
+const DISPATCH_ACTIONS: ActionType[] = [
+  'assign_nearest_eligible',
+  'assign_nearest_idle_or_repositioning',
+  'assign_prefer_zone',
+  'hold',
+]
 const REPOSITION_ACTIONS: ActionType[] = [
   'reposition_to_best_deficit',
   'reposition_to_zone',
@@ -40,6 +46,7 @@ const REPOSITION_ACTIONS: ActionType[] = [
 
 /** Inline editor for one routing rule's conditions and action. */
 export function RuleEditor({ rule, onChange, onClose }: Props) {
+  const { uiMode } = useUiMode()
   const actions = rule.phase === 'dispatch' ? DISPATCH_ACTIONS : REPOSITION_ACTIONS
 
   const updateCondition = (index: number, patch: Partial<RoutingCondition>) => {
@@ -85,12 +92,8 @@ export function RuleEditor({ rule, onChange, onClose }: Props) {
               onChange={e => updateCondition(i, { type: e.target.value as ConditionType })}
               className="input-dark text-xs flex-1 min-w-[8rem]"
             >
-              {CONDITION_TYPES.filter(t =>
-                rule.phase === 'dispatch'
-                  ? ['pending_trips', 'trip_wait_minutes', 'zone_deficit', 'active_event', 'time_of_day'].includes(t)
-                  : true,
-              ).map(t => (
-                <option key={t} value={t}>{CONDITION_LABELS[t]}</option>
+              {CONDITION_TYPES.map(t => (
+                <option key={t} value={t}>{conditionLabel(t, uiMode)}</option>
               ))}
             </select>
             {cond.type !== 'active_event' && (
@@ -111,6 +114,17 @@ export function RuleEditor({ rule, onChange, onClose }: Props) {
                   onChange={e => updateCondition(i, { value: parseFloat(e.target.value) || 0 })}
                   className="input-dark text-xs w-16"
                 />
+                {cond.type === 'time_of_day' && (
+                  <input
+                    type="number"
+                    step="0.5"
+                    placeholder="end hr"
+                    value={cond.value_max ?? ''}
+                    onChange={e => updateCondition(i, { value_max: e.target.value ? parseFloat(e.target.value) : null })}
+                    className="input-dark text-xs w-16"
+                    title="End hour (optional range)"
+                  />
+                )}
               </>
             )}
             {['zone_deficit', 'zone_surplus', 'pending_trips', 'forecast_rising', 'active_event'].includes(cond.type) && (
@@ -139,7 +153,7 @@ export function RuleEditor({ rule, onChange, onClose }: Props) {
           className="input-dark w-full text-xs"
         >
           {actions.map(a => (
-            <option key={a} value={a}>{ACTION_LABELS[a]}</option>
+            <option key={a} value={a}>{actionLabel(a, uiMode)}</option>
           ))}
         </select>
         {rule.action.type === 'reposition_to_zone' && (

@@ -24,6 +24,21 @@ def _zone_rings_by_name() -> dict[str, tuple[tuple[float, float], ...]]:
     return rings
 
 
+def nodes_by_zone(router: CityRouter) -> dict[str, list[str]]:
+    """Group graph node ids by demand zone (public wrapper)."""
+    return _nodes_by_zone(router)
+
+
+def placement_in_zone(
+    router: CityRouter,
+    zone: str,
+    rng: random.Random,
+    used_positions: list[tuple[float, float]],
+) -> tuple[str, float, float] | None:
+    """Place one vehicle inside ``zone`` (public wrapper)."""
+    return _placement_in_zone(router, zone, rng, _nodes_by_zone(router), used_positions)
+
+
 def _nodes_by_zone(router: CityRouter) -> dict[str, list[str]]:
     """Group graph node ids by demand zone."""
     return router.nodes_by_demand_zone()

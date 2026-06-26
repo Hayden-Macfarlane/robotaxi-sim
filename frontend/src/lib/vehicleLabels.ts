@@ -1,25 +1,37 @@
 import type { VehicleState } from '../types/simulation'
 
-/** Operator-friendly labels for vehicle operational states. */
-export const STATUS_LABELS: Record<VehicleState, string> = {
-  idle: 'Available',
-  to_pickup: 'Picking up',
-  with_rider: 'With rider',
-  repositioning: 'Moving',
-  at_depot: 'At depot',
-  charging: 'Charging',
-  maintenance: 'In maintenance',
-  cleaning: 'Being cleaned',
+interface StatusCopy {
+  industry: string
+  plain: string
 }
 
-export function statusLabel(state: VehicleState | string): string {
-  return STATUS_LABELS[state as VehicleState] ?? state.replace(/_/g, ' ')
+/** Industry and plain labels for vehicle operational states. */
+export const STATUS_COPY: Record<VehicleState, StatusCopy> = {
+  idle: { industry: 'Available', plain: 'Waiting for a trip' },
+  to_pickup: { industry: 'En route to pickup', plain: 'Heading to rider' },
+  with_rider: { industry: 'On trip', plain: 'Carrying a rider' },
+  repositioning: { industry: 'Rebalancing', plain: 'Empty, moving to better location' },
+  at_depot: { industry: 'At depot', plain: 'Parked off-street' },
+  charging: { industry: 'Charging', plain: 'Charging battery' },
+  maintenance: { industry: 'In service', plain: 'In maintenance' },
+  cleaning: { industry: 'Cleaning', plain: 'Being cleaned' },
+}
+
+/** @deprecated Use statusLabel(state, mode) instead. */
+export const STATUS_LABELS: Record<VehicleState, string> = Object.fromEntries(
+  Object.entries(STATUS_COPY).map(([k, v]) => [k, v.industry]),
+) as Record<VehicleState, string>
+
+export function statusLabel(state: VehicleState | string, mode: 'standard' | 'expert' = 'expert'): string {
+  const copy = STATUS_COPY[state as VehicleState]
+  if (!copy) return state.replace(/_/g, ' ')
+  return mode === 'standard' ? copy.plain : copy.industry
 }
 
 const FACILITY_KIND_LABELS: Record<string, string> = {
-  charger: 'Charger',
-  cleaning: 'Cleaning bay',
-  maintenance: 'Maintenance',
+  charger: 'Charge',
+  cleaning: 'Clean',
+  maintenance: 'Service',
   depot: 'Depot',
 }
 

@@ -1,19 +1,30 @@
+import { useUiMode } from '../../contexts/UiModeContext'
+import { statusLabel } from '../../lib/vehicleLabels'
+
 /** Semantic status pill with colored dot for fleet and trip states. */
 
-const STATE_STYLES: Record<string, { dot: string; label: string }> = {
-  idle: { dot: 'bg-status-idle', label: 'Idle' },
-  to_pickup: { dot: 'bg-status-pickup', label: 'En Route' },
-  with_rider: { dot: 'bg-status-rider', label: 'With Rider' },
-  repositioning: { dot: 'bg-status-reposition', label: 'Repositioning' },
-  at_depot: { dot: 'bg-slate-500', label: 'At Depot' },
-  charging: { dot: 'bg-yellow-400', label: 'Charging' },
-  maintenance: { dot: 'bg-orange-500', label: 'Maintenance' },
-  cleaning: { dot: 'bg-blue-400', label: 'Cleaning' },
-  pending: { dot: 'bg-status-pickup', label: 'Pending' },
-  assigned: { dot: 'bg-status-idle', label: 'Assigned' },
-  in_progress: { dot: 'bg-status-rider', label: 'In Progress' },
-  completed: { dot: 'bg-status-rider', label: 'Completed' },
-  cancelled: { dot: 'bg-red-500', label: 'Cancelled' },
+const STATE_DOTS: Record<string, string> = {
+  idle: 'bg-status-idle',
+  to_pickup: 'bg-status-pickup',
+  with_rider: 'bg-status-rider',
+  repositioning: 'bg-status-reposition',
+  at_depot: 'bg-slate-500',
+  charging: 'bg-yellow-400',
+  maintenance: 'bg-orange-500',
+  cleaning: 'bg-blue-400',
+  pending: 'bg-status-pickup',
+  assigned: 'bg-status-idle',
+  in_progress: 'bg-status-rider',
+  completed: 'bg-status-rider',
+  cancelled: 'bg-red-500',
+}
+
+const TRIP_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  assigned: 'Assigned',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
 }
 
 interface Props {
@@ -21,11 +32,14 @@ interface Props {
 }
 
 export function StatusBadge({ state }: Props) {
-  const style = STATE_STYLES[state] ?? { dot: 'bg-text-secondary', label: state }
+  const { uiMode } = useUiMode()
+  const dot = STATE_DOTS[state] ?? 'bg-text-secondary'
+  const label = TRIP_LABELS[state] ?? statusLabel(state, uiMode)
+
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-base border border-border-default text-xs text-text-primary">
-      <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
-      {style.label}
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {label}
     </span>
   )
 }

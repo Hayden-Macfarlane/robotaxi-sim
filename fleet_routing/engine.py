@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from core_data.models import GeoPoint, NetworkPolicy, TripRequest, Vehicle, VehicleState
 from dispatch import pick_best_vehicle
+from dispatch.batch_matcher import zone_dispatch_enabled
+from dispatch.matcher import dispatch_zone_context_from_rows
 from fleet_routing.constraints import (
     best_deficit_zone,
     pick_staging_in_zone,
@@ -72,6 +74,8 @@ class RuleEvaluator:
         """Return a dispatch decision for ``trip``, or None."""
         if not self._rule_set.routing_enabled:
             return None
+        if not zone_dispatch_enabled(trip, ctx.policy):
+            return None
         trip_zone = ctx.trip_zone(trip)
         wait_min = max(0.0, (ctx.sim_time_h - trip.requested_at_h) * 60.0)
         for rule in self._rule_set.sorted_rules(RulePhase.DISPATCH):
@@ -115,6 +119,10 @@ class RuleEvaluator:
         vzone = ctx.vehicle_zone(vehicle)
         idle_min = max(0.0, (ctx.sim_time_h - vehicle.idle_since_h) * 60.0)
         for rule in self._rule_set.sorted_rules(RulePhase.REPOSITION):
+            if not ctx.policy.proactive_staging_enabled and any(
+                c.type == ConditionType.FORECAST_RISING for c in rule.conditions
+            ):
+                continue
             if not self._conditions_match(
                 rule,
                 ctx,
@@ -175,12 +183,18 @@ class RuleEvaluator:
         elif cond.type == ConditionType.ZONE_SURPLUS:
             metric = ctx.surplus_for_zone(zone)
         elif cond.type == ConditionType.IDLE_MINUTES:
+            from dispatch.reposition import idle_patience_min
+
             metric = wait_min
+            threshold = idle_patience_min(ctx.policy, vehicle_zone)
+            return self._compare(metric, cond.operator, threshold)
         elif cond.type == ConditionType.FORECAST_RISING:
             if cond.zone:
                 metric = ctx.forecast_rising(cond.zone)
             else:
                 metric = max((ctx.forecast_rising(z) for z in ctx.demand_now_by_zone), default=0.0)
+            threshold = ctx.policy.forecast_rising_threshold
+            return self._compare(metric, cond.operator, threshold)
         elif cond.type == ConditionType.PENDING_TRIPS:
             metric = float(ctx.pending_in_zone(zone))
         elif cond.type == ConditionType.TRIP_WAIT_MINUTES:
@@ -225,6 +239,12 @@ class RuleEvaluator:
         action = rule.action.type
         if action == ActionType.HOLD:
             return None
+        zone_ctx = dispatch_zone_context_from_rows(
+            ctx.supply_by_zone,
+            ctx.zone_rows,
+            ctx.policy,
+        )
+        traffic = ctx.policy.global_traffic_multiplier
         eligible = {
             vid: v for vid, v in vehicles.items()
             if vid not in assigned_vehicle_ids and vehicle_eligible_for_dispatch(v, ctx.policy)
@@ -237,6 +257,8 @@ class RuleEvaluator:
                 surge_multiplier=ctx.policy.surge_multiplier,
                 policy=ctx.policy,
                 include_repositioning=False,
+                zone_ctx=zone_ctx,
+                traffic_multiplier=traffic,
             )
             if match is None:
                 return None
@@ -260,6 +282,8 @@ class RuleEvaluator:
                 surge_multiplier=ctx.policy.surge_multiplier,
                 policy=ctx.policy,
                 include_repositioning=True,
+                zone_ctx=zone_ctx,
+                traffic_multiplier=traffic,
             )
             if match is None:
                 return None
@@ -284,6 +308,8 @@ class RuleEvaluator:
                 surge_multiplier=ctx.policy.surge_multiplier,
                 policy=ctx.policy,
                 include_repositioning=False,
+                zone_ctx=zone_ctx,
+                traffic_multiplier=traffic,
             )
             if match is None:
                 return None

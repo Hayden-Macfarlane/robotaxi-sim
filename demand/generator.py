@@ -39,10 +39,21 @@ class DemandGenerator:
     _rng: random.Random = field(default_factory=random.Random)
     base_trips_per_hour: float = 24.0
     _events: list = field(default_factory=list)
+    _zone_weights: dict[str, float] = field(default_factory=dict)
 
     def set_events(self, events: list) -> None:
         """Attach active special events for boosted spawn rates."""
         self._events = events
+
+    def set_zone_weights(self, weights: dict[str, float]) -> None:
+        """Override default zone spawn weights from operator policy."""
+        self._zone_weights = {k: float(v) for k, v in weights.items() if float(v) > 0}
+
+    def zone_weight(self, zone: str) -> float:
+        """Return base weight for ``zone`` respecting operator overrides."""
+        if zone in self._zone_weights:
+            return self._zone_weights[zone]
+        return ZONE_WEIGHTS.get(zone, 1.0)
 
     def set_seed(self, seed: int) -> None:
         """Fix RNG for reproducible tests."""
@@ -61,7 +72,7 @@ class DemandGenerator:
 
     def zone_spawn_weight(self, zone: str, sim_hour: float) -> float:
         """Return relative spawn weight for ``zone`` at ``sim_hour``."""
-        base = ZONE_WEIGHTS.get(zone, 1.0)
+        base = self.zone_weight(zone)
         return forecast_intensity(zone, sim_hour, base_weight=base, events=self._events)
 
     def expected_trips(self, dt_hours: float, sim_hour: float) -> float:

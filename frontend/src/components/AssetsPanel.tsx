@@ -6,6 +6,8 @@ import { DataTable, type Column } from './ui/DataTable'
 import { MetricPill } from './ui/MetricPill'
 import { PanelSection } from './ui/PanelSection'
 
+const OFF_STREET = new Set(['at_depot', 'charging', 'maintenance', 'cleaning'])
+
 interface Props {
   vehicles: VehicleSnap[]
   facilities: FacilitySnap[]
@@ -17,6 +19,7 @@ interface Props {
   onToggleSelect: (vehicleId: string) => void
   onHighlightVehicle: (vehicleId: string | null) => void
   onPanToFacility: (lat: number, lon: number) => void
+  onRequestRelease: (vehicleId: string) => void
   onCommand: (cmd: SimCommand) => void
 }
 
@@ -63,6 +66,7 @@ export function AssetsPanel({
   onToggleSelect,
   onHighlightVehicle,
   onPanToFacility,
+  onRequestRelease,
   onCommand,
 }: Props) {
   const [filter, setFilter] = useState<AssetFilter>('all')
@@ -71,6 +75,17 @@ export function AssetsPanel({
 
   const summary = fleetSummary(vehicles, kpis)
   const byKind = (kind: string) => facilities.find(f => f.kind === kind)
+
+  const parkedByFacility = useMemo(() => {
+    const out: Record<string, VehicleSnap[]> = {}
+    for (const v of vehicles) {
+      if (v.facility_id && OFF_STREET.has(v.state)) {
+        out[v.facility_id] = out[v.facility_id] ?? []
+        out[v.facility_id].push(v)
+      }
+    }
+    return out
+  }, [vehicles])
 
   const filtered = useMemo(() => filterVehicles(vehicles, filter), [vehicles, filter])
 
@@ -160,11 +175,10 @@ export function AssetsPanel({
       key: 'actions',
       header: '',
       render: v => {
-        const canStage = v.state === 'idle'
-        const atFacility = ['at_depot', 'charging', 'maintenance', 'cleaning'].includes(v.state)
+        const atFacility = OFF_STREET.has(v.state)
         return (
           <div className="flex gap-1 flex-wrap justify-end" onClick={e => e.stopPropagation()}>
-            {canStage && (
+            {v.state === 'idle' && (
               <>
                 <button
                   type="button"
@@ -175,21 +189,36 @@ export function AssetsPanel({
                   Stage
                 </button>
                 {byKind('charger') && (
-                  <button type="button" title="Send to charger" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('charger')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-yellow-400 rounded">Chg</button>
+                  <button type="button" title="Send to charger" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('charger')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-yellow-400 rounded">Charge</button>
                 )}
                 {byKind('cleaning') && (
-                  <button type="button" title="Send to cleaning" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('cleaning')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-blue-400 rounded">Cln</button>
+                  <button type="button" title="Send to cleaning" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('cleaning')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-blue-400 rounded">Clean</button>
                 )}
                 {byKind('maintenance') && (
-                  <button type="button" title="Send to maintenance" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('maintenance')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-orange-400 rounded">Mnt</button>
+                  <button type="button" title="Send to maintenance" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('maintenance')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-orange-400 rounded">Service</button>
                 )}
                 {byKind('depot') && (
-                  <button type="button" title="Send to depot" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('depot')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-text-primary rounded">Dep</button>
+                  <button type="button" title="Send to depot" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('depot')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary hover:text-text-primary rounded">Depot</button>
+                )}
+              </>
+            )}
+            {v.state === 'repositioning' && (
+              <>
+                <button type="button" title="Restage on map" onClick={() => onSelectVehicle(stagingVehicleId === v.id ? null : v.id)} className="px-1 py-0.5 text-[10px] text-accent hover:bg-accent/20 rounded">Stage</button>
+                {byKind('depot') && (
+                  <button type="button" onClick={() => onCommand({ type: 'SEND_TO_FACILITY', vehicle_id: v.id, facility_id: byKind('depot')!.id })} className="px-1 py-0.5 text-[10px] text-text-secondary rounded">Depot</button>
                 )}
               </>
             )}
             {atFacility && (
-              <button type="button" onClick={() => onCommand({ type: 'RELEASE_FROM_FACILITY', vehicle_id: v.id })} className="px-1 py-0.5 text-[10px] text-emerald-400 hover:text-emerald-300 rounded">Out</button>
+              <button
+                type="button"
+                title="Route out to a zone you choose"
+                onClick={() => onRequestRelease(v.id)}
+                className="px-1 py-0.5 text-[10px] text-emerald-400 hover:text-emerald-300 rounded"
+              >
+                Return to street
+              </button>
             )}
           </div>
         )
@@ -210,8 +239,26 @@ export function AssetsPanel({
       render: f => <span className="text-text-secondary">{facilityKindLabel(f.kind)}</span>,
     },
     {
+      key: 'parked',
+      header: 'Parked',
+      render: f => {
+        const parked = parkedByFacility[f.id] ?? []
+        if (parked.length === 0) return <span className="text-text-secondary">—</span>
+        return (
+          <div className="flex flex-col gap-0.5">
+            {parked.map(v => (
+              <div key={v.id} className="flex items-center gap-1">
+                <span className="font-mono text-[10px]">{v.id}</span>
+                <button type="button" onClick={e => { e.stopPropagation(); onRequestRelease(v.id) }} className="text-[10px] text-emerald-400 hover:underline">Return to street</button>
+              </div>
+            ))}
+          </div>
+        )
+      },
+    },
+    {
       key: 'occupancy',
-      header: 'Occupancy',
+      header: 'Occ',
       render: f => {
         const occ = facilityOccupancy(f.id, vehicles)
         return <span className="font-mono text-text-secondary">{occ}/{f.capacity}</span>
@@ -262,11 +309,18 @@ export function AssetsPanel({
             sortDir={sortDir}
             onSort={handleSort}
             selectedKey={highlightVehicleId ?? stagingVehicleId}
-            onSelectRow={v => onHighlightVehicle(v.id)}
+            onSelectRow={v => {
+              onHighlightVehicle(v.id)
+              if (v.state === 'idle' || v.state === 'repositioning') {
+                onSelectVehicle(v.id)
+              }
+            }}
             emptyMessage="No vehicles match this filter"
           />
           {stagingVehicleId && (
-            <p className="pt-2 text-xs text-accent">Click map to stage {stagingVehicleId}</p>
+            <p className="pt-2 text-xs text-accent">
+              {stagingVehicleId} selected — click anywhere on the map to stage
+            </p>
           )}
           {selectedVehicleIds.length > 0 && (
             <p className="pt-2 text-xs text-accent">{selectedVehicleIds.length} selected — click map to stage</p>
